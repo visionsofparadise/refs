@@ -1,11 +1,14 @@
 use std::path::{Path, PathBuf};
 
+use crate::compose_declarations::{compose_declarations, rebase, Move};
 use crate::format_path::format_path;
 use crate::list_references::ExistenceCache;
 use crate::map_in_parallel::map_in_parallel;
-use crate::parse_declarations::{Declaration, Origin, Rejected};
+use crate::parse_declarations::{Declaration, Rejected};
 use crate::render_reference::render_reference;
-use crate::resolve_reference::{is_beneath, key_of, normalize_path, resolve_reference, PathForm};
+use crate::resolve_reference::{
+    is_beneath, key_of, normalize_path, resolve_reference, Candidate, PathForm, PathStyle,
+};
 use crate::tokenize_references::{tokenize_references, Token};
 use crate::walk_scope::{read_text, Scope};
 
@@ -39,15 +42,6 @@ pub struct FixPlan {
     pub errors: Vec<String>,
 }
 
-const SOURCE_STILL_EXISTS: &str = "source still exists";
-const DESTINATION_MISSING: &str = "destination missing";
-const PATH_STILL_EXISTS: &str = "path still exists";
-
-struct Move {
-    from: PathBuf,
-    to: PathBuf,
-}
-
 struct Moves {
     moves: Vec<Move>,
     deletes: Vec<PathBuf>,
@@ -56,6 +50,16 @@ struct Moves {
 struct Mapped {
     path: PathBuf,
     case_only: bool,
+}
+
+enum Forward {
+    Mapped(Mapped),
+    Deleted,
+}
+
+enum Inferred {
+    Mapped(PathBuf),
+    Deleted,
 }
 
 struct Rewrite {
@@ -69,12 +73,6 @@ struct Context<'a> {
     scope: &'a Scope,
     working_directory: &'a Path,
     cache: &'a ExistenceCache,
-}
-
-fn rebase(path: &Path, base: &Path, onto: &Path) -> PathBuf {
-    path.components()
-        .skip(key_of(base).len())
-        .fold(onto.to_path_buf(), |joined, part| joined.join(part))
 }
 
 fn recase(path: &Path, from: &Path, to: &Path) -> PathBuf {
@@ -92,7 +90,11 @@ fn recase(path: &Path, from: &Path, to: &Path) -> PathBuf {
         })
 }
 
-fn canonical_of(path: &Path, cache: &ExistenceCache) -> PathBuf {
+fn canonical_of(path: &Path, working_directory: &Path, cache: &ExistenceCache) -> PathBuf {
+    if is_beneath(path, working_directory) {
+        return path.to_path_buf();
+    }
+
     for ancestor in path.ancestors().skip(1) {
         if !cache.exists(ancestor) {
             continue;
@@ -106,217 +108,61 @@ fn canonical_of(path: &Path, cache: &ExistenceCache) -> PathBuf {
     path.to_path_buf()
 }
 
-fn canonicalize_declaration(declaration: Declaration, cache: &ExistenceCache) -> Declaration {
+fn canonicalize_declaration(
+    declaration: Declaration,
+    working_directory: &Path,
+    cache: &ExistenceCache,
+) -> Declaration {
+    let canonical = |path: &Path| canonical_of(path, working_directory, cache);
+
     match declaration {
         Declaration::Move { from, to, origin } => Declaration::Move {
-            from: canonical_of(&from, cache),
-            to: canonical_of(&to, cache),
+            from: canonical(&from),
+            to: canonical(&to),
             origin,
         },
         Declaration::Delete { path, origin } => Declaration::Delete {
-            path: canonical_of(&path, cache),
+            path: canonical(&path),
             origin,
         },
     }
 }
 
-fn origin_of(declaration: &Declaration) -> &Origin {
-    match declaration {
-        Declaration::Move { origin, .. } | Declaration::Delete { origin, .. } => origin,
-    }
-}
+fn prefix_of(from: &Path, to: &Path, ancestor: &Path) -> Option<PathBuf> {
+    let from_key = key_of(from);
+    let to_key = key_of(to);
+    let depth = from_key.len() - key_of(ancestor).len();
 
-fn is_composable(declaration: &Declaration, snapshot: Option<usize>) -> bool {
-    snapshot.is_none() || origin_of(declaration).snapshot != snapshot
-}
-
-fn earlier_source_of(
-    composed: &[Declaration],
-    path: &Path,
-    snapshot: Option<usize>,
-) -> Option<(usize, PathBuf, bool)> {
-    composed
-        .iter()
-        .enumerate()
-        .filter(|(_, declaration)| is_composable(declaration, snapshot))
-        .filter_map(|(index, declaration)| match declaration {
-            Declaration::Move { from, to, .. } if is_beneath(path, to) => Some((index, from, to)),
-            _ => None,
-        })
-        .max_by_key(|(_, _, to)| key_of(to).len())
-        .map(|(index, from, to)| (index, rebase(path, to, from), key_of(path) == key_of(to)))
-}
-
-fn compose_move(composed: &mut Vec<Declaration>, from: PathBuf, to: PathBuf, origin: Origin) {
-    let snapshot = origin.snapshot;
-    let chained = earlier_source_of(composed, &from, snapshot);
-
-    for (index, declaration) in composed.iter_mut().enumerate() {
-        if !is_composable(declaration, snapshot)
-            || chained.as_ref().is_some_and(|(chain, ..)| *chain == index)
-        {
-            continue;
-        }
-
-        let Declaration::Move {
-            from: earlier_from,
-            to: earlier_to,
-            origin: earlier_origin,
-        } = declaration
-        else {
-            continue;
-        };
-
-        if key_of(earlier_to) == key_of(&to) {
-            *declaration = Declaration::Delete {
-                path: earlier_from.clone(),
-                origin: origin.clone(),
-            };
-        } else if is_beneath(earlier_to, &from) && key_of(earlier_to) != key_of(&from) {
-            *earlier_to = rebase(earlier_to, &from, &to);
-            earlier_origin.snapshot = snapshot;
-        }
+    if to_key.len() < depth || from_key[from_key.len() - depth..] != to_key[to_key.len() - depth..]
+    {
+        return None;
     }
 
-    let (from, index) = match chained {
-        Some((index, source, true)) => (source, Some(index)),
-        Some((_, source, false)) => (source, None),
-        None => (from, None),
-    };
-
-    let round_trip = from == to;
-    let declaration = Declaration::Move { from, to, origin };
-
-    match (index, round_trip) {
-        (Some(index), true) => {
-            composed.remove(index);
-        }
-        (Some(index), false) => composed[index] = declaration,
-        (None, true) => {}
-        (None, false) => composed.push(declaration),
-    }
-}
-
-fn compose_delete(composed: &mut Vec<Declaration>, path: PathBuf, origin: Origin) {
-    let snapshot = origin.snapshot;
-    let chained = earlier_source_of(composed, &path, snapshot);
-    let mut covered = false;
-
-    for declaration in composed.iter_mut() {
-        if !is_composable(declaration, snapshot) {
-            continue;
-        }
-
-        if let Declaration::Move { from, to, .. } = declaration {
-            if is_beneath(to, &path) {
-                covered |= key_of(to) == key_of(&path);
-
-                *declaration = Declaration::Delete {
-                    path: from.clone(),
-                    origin: origin.clone(),
-                };
-            }
-        }
-    }
-
-    if covered {
-        return;
-    }
-
-    let path = chained.map_or(path, |(_, source, _)| source);
-
-    composed.push(Declaration::Delete { path, origin });
-}
-
-fn compose(declarations: Vec<Declaration>) -> Vec<Declaration> {
-    let mut composed: Vec<Declaration> = Vec::new();
-
-    for declaration in declarations {
-        match declaration {
-            Declaration::Move { from, to, origin } => {
-                compose_move(&mut composed, from, to, origin);
-            }
-            Declaration::Delete { path, origin } => {
-                compose_delete(&mut composed, path, origin);
-            }
-        }
-    }
-
-    composed
-}
-
-fn validate(declarations: Vec<Declaration>, cache: &ExistenceCache) -> (Moves, Vec<Rejected>) {
-    let mut moves = Moves {
-        moves: Vec::new(),
-        deletes: Vec::new(),
-    };
-    let mut rejected = Vec::new();
-
-    let refilled = |from: &Path, snapshot: Option<usize>| {
-        snapshot.is_some()
-            && declarations.iter().any(|declaration| match declaration {
-                Declaration::Move { to, origin, .. } => {
-                    origin.snapshot == snapshot && is_beneath(from, to)
-                }
-                Declaration::Delete { .. } => false,
-            })
-    };
-    let refilled: Vec<bool> = declarations
-        .iter()
-        .map(|declaration| match declaration {
-            Declaration::Move { from, origin, .. } => refilled(from, origin.snapshot),
-            Declaration::Delete { .. } => false,
-        })
-        .collect();
-
-    for (declaration, refilled) in declarations.into_iter().zip(refilled) {
-        match declaration {
-            Declaration::Move { from, to, origin } => {
-                let reason = if key_of(&from) == key_of(&to) {
-                    None
-                } else if cache.exists(&from) && !refilled {
-                    Some(SOURCE_STILL_EXISTS)
-                } else if !cache.exists(&to) {
-                    Some(DESTINATION_MISSING)
-                } else {
-                    None
-                };
-
-                match reason {
-                    Some(reason) => rejected.push(Rejected {
-                        origin,
-                        reason: reason.to_string(),
-                    }),
-                    None => moves.moves.push(Move { from, to }),
-                }
-            }
-            Declaration::Delete { path, origin } => {
-                if cache.exists(&path) {
-                    rejected.push(Rejected {
-                        origin,
-                        reason: PATH_STILL_EXISTS.to_string(),
-                    });
-                } else {
-                    moves.deletes.push(path);
-                }
-            }
-        }
-    }
-
-    rejected.sort_by_key(|rejection| rejection.origin.line);
-
-    (moves, rejected)
+    to.ancestors().nth(depth).map(Path::to_path_buf)
 }
 
 impl Moves {
-    fn forward_of(&self, path: &Path) -> Mapped {
+    fn forward_of(&self, path: &Path) -> Forward {
         let found = self
             .moves
             .iter()
             .filter(|found| is_beneath(path, &found.from))
             .max_by_key(|found| key_of(&found.from).len());
 
-        match found {
+        let deleted = self
+            .deletes
+            .iter()
+            .filter(|deleted| is_beneath(path, deleted))
+            .map(|deleted| key_of(deleted).len())
+            .max();
+
+        let moved = found.map(|found| key_of(&found.from).len());
+
+        if deleted.is_some() && deleted > moved {
+            return Forward::Deleted;
+        }
+
+        Forward::Mapped(match found {
             Some(found) if key_of(&found.from) == key_of(&found.to) => Mapped {
                 path: recase(path, &found.from, &found.to),
                 case_only: true,
@@ -329,22 +175,68 @@ impl Moves {
                 path: path.to_path_buf(),
                 case_only: false,
             },
-        }
+        })
     }
 
     fn origin_of(&self, file: &Path) -> PathBuf {
-        self.moves
+        let mut best: Option<&Move> = None;
+
+        for found in self
+            .moves
             .iter()
             .filter(|found| is_beneath(file, &found.to))
-            .max_by_key(|found| key_of(&found.to).len())
-            .map_or_else(
-                || file.to_path_buf(),
-                |found| rebase(file, &found.to, &found.from),
-            )
+        {
+            if best.is_none_or(|best| key_of(&found.to).len() > key_of(&best.to).len()) {
+                best = Some(found);
+            }
+        }
+
+        best.map_or_else(
+            || file.to_path_buf(),
+            |found| rebase(file, &found.to, &found.from),
+        )
     }
 
-    fn is_deleted(&self, path: &Path) -> bool {
-        self.deletes.iter().any(|deleted| is_beneath(path, deleted))
+    fn is_source(&self, path: &Path) -> bool {
+        self.moves.iter().any(|found| is_beneath(path, &found.from))
+    }
+
+    fn is_exact_source(&self, path: &Path) -> bool {
+        self.moves
+            .iter()
+            .any(|found| key_of(path) == key_of(&found.from))
+    }
+
+    fn is_arrival(&self, path: &Path) -> bool {
+        !self.is_source(path) && self.moves.iter().any(|found| is_beneath(path, &found.to))
+    }
+
+    fn inferred_of(&self, ancestor: &Path) -> Option<Inferred> {
+        let strictly_beneath =
+            |path: &Path| is_beneath(path, ancestor) && key_of(path) != key_of(ancestor);
+
+        let moves: Vec<&Move> = self
+            .moves
+            .iter()
+            .filter(|found| strictly_beneath(&found.from))
+            .collect();
+
+        let deleted = self.deletes.iter().any(|deleted| strictly_beneath(deleted));
+
+        match (moves.as_slice(), deleted) {
+            ([], true) => Some(Inferred::Deleted),
+            ([], false) | ([_, ..], true) => None,
+            ([first, rest @ ..], false) => {
+                let prefix = prefix_of(&first.from, &first.to, ancestor)?;
+
+                rest.iter()
+                    .all(|found| {
+                        prefix_of(&found.from, &found.to, ancestor)
+                            .is_some_and(|other| key_of(&other) == key_of(&prefix))
+                    })
+                    .then_some(Inferred::Mapped(prefix))
+            }
+        }
     }
 }
 
@@ -365,24 +257,76 @@ fn resolves_to(
     let (candidates, _) = resolve_reference(&token.path, directory, context.working_directory);
     let shared_base = key_of(directory) == key_of(context.working_directory);
 
-    candidates
-        .iter()
-        .find(|candidate| {
-            candidate.form == *form
-                || (shared_base && is_relative(form) && is_relative(&candidate.form))
-        })
-        .is_some_and(|found| {
-            if mapped.case_only {
-                found.target == mapped.path
+    for candidate in &candidates {
+        let same_form = candidate.form == *form
+            || (shared_base && is_relative(form) && is_relative(&candidate.form));
+
+        if same_form {
+            return if mapped.case_only {
+                candidate.target == mapped.path
             } else {
-                key_of(&found.target) == key_of(&mapped.path)
-            }
-        })
+                key_of(&candidate.target) == key_of(&mapped.path)
+            };
+        }
+
+        if context.cache.exists(&candidate.target) {
+            return false;
+        }
+    }
+
+    false
+}
+
+fn is_in_scope(path: &Path, context: &Context) -> bool {
+    context.scope.entries.contains(&key_of(path))
+        || dunce::canonicalize(path)
+            .is_ok_and(|canonical| context.scope.entries.contains(&key_of(&canonical)))
 }
 
 enum Decision {
     Rewrite(Rewrite),
     Report(Outcome),
+}
+
+fn settle(
+    token: &Token,
+    candidate: &Candidate,
+    style: &PathStyle,
+    mapped: Mapped,
+    directory: &Path,
+    context: &Context,
+) -> Option<Decision> {
+    if resolves_to(token, &candidate.form, directory, &mapped, context) {
+        return None;
+    }
+
+    if !is_in_scope(&mapped.path, context) {
+        return Some(Decision::Report(Outcome::OutOfScope {
+            target: mapped.path,
+        }));
+    }
+
+    let rendered = render_reference(
+        &mapped.path,
+        &candidate.form,
+        style,
+        &token.suffix,
+        directory,
+        context.working_directory,
+        &|path| context.cache.exists(path),
+    );
+
+    match rendered {
+        Some(rendered) if rendered == token.path => None,
+        Some(rendered) => Some(Decision::Rewrite(Rewrite {
+            token: token.clone(),
+            rendered,
+            target: mapped.path,
+        })),
+        None => Some(Decision::Report(Outcome::Unrewritable {
+            target: mapped.path,
+        })),
+    }
 }
 
 fn decide(
@@ -393,51 +337,44 @@ fn decide(
 ) -> Option<Decision> {
     let (candidates, style) =
         resolve_reference(&token.path, origin_directory, context.working_directory);
+    let deleted = |candidate: &Candidate| {
+        Some(Decision::Report(Outcome::Deleted {
+            target: candidate.target.clone(),
+        }))
+    };
 
     for candidate in &candidates {
-        let mapped = context.moves.forward_of(&candidate.target);
+        let mapped = match context.moves.forward_of(&candidate.target) {
+            Forward::Deleted => return deleted(candidate),
+            Forward::Mapped(mapped) => mapped,
+        };
 
-        if !context.cache.exists(&mapped.path) {
-            if context.moves.is_deleted(&candidate.target) {
-                return Some(Decision::Report(Outcome::Deleted {
-                    target: mapped.path,
-                }));
+        if context.cache.exists(&mapped.path) {
+            if context.moves.is_arrival(&candidate.target) {
+                continue;
             }
 
+            return settle(token, candidate, &style, mapped, directory, context);
+        }
+
+        if context.cache.exists(&candidate.target)
+            || context.moves.is_exact_source(&candidate.target)
+        {
             continue;
         }
 
-        if resolves_to(token, &candidate.form, directory, &mapped, context) {
-            return None;
+        match context.moves.inferred_of(&candidate.target) {
+            Some(Inferred::Deleted) => return deleted(candidate),
+            Some(Inferred::Mapped(path)) if context.cache.exists(&path) => {
+                let mapped = Mapped {
+                    path,
+                    case_only: false,
+                };
+
+                return settle(token, candidate, &style, mapped, directory, context);
+            }
+            _ => {}
         }
-
-        if !context.scope.entries.contains(&key_of(&mapped.path)) {
-            return Some(Decision::Report(Outcome::OutOfScope {
-                target: mapped.path,
-            }));
-        }
-
-        let rendered = render_reference(
-            &mapped.path,
-            &candidate.form,
-            &style,
-            &token.suffix,
-            directory,
-            context.working_directory,
-            &|path| context.cache.exists(path),
-        );
-
-        return match rendered {
-            Some(rendered) if rendered == token.path => None,
-            Some(rendered) => Some(Decision::Rewrite(Rewrite {
-                token: token.clone(),
-                rendered,
-                target: mapped.path,
-            })),
-            None => Some(Decision::Report(Outcome::Unrewritable {
-                target: mapped.path,
-            })),
-        };
     }
 
     None
@@ -572,10 +509,15 @@ pub fn plan_fix(
 
     let declarations = declarations
         .into_iter()
-        .map(|declaration| canonicalize_declaration(declaration, &cache))
+        .map(|declaration| canonicalize_declaration(declaration, working_directory, &cache))
         .collect();
 
-    let (moves, rejected) = validate(compose(declarations), &cache);
+    let composition = compose_declarations(declarations, &|path| cache.exists(path));
+    let moves = Moves {
+        moves: composition.moves,
+        deletes: composition.deletes,
+    };
+    let rejected = composition.rejected;
 
     let context = Context {
         moves: &moves,
@@ -588,9 +530,17 @@ pub fn plan_fix(
         unscanned: moves
             .moves
             .iter()
-            .filter(|found| !scope.entries.contains(&key_of(&found.to)))
-            .map(|found| found.to.clone())
-            .collect(),
+            .filter(|found| !is_in_scope(&found.to, &context))
+            .fold(Vec::new(), |mut unscanned: Vec<PathBuf>, found| {
+                if !unscanned
+                    .iter()
+                    .any(|seen| key_of(seen) == key_of(&found.to))
+                {
+                    unscanned.push(found.to.clone());
+                }
+
+                unscanned
+            }),
         rejected,
         ..FixPlan::default()
     };

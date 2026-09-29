@@ -740,6 +740,8 @@ fn parse_lines(
             let line = raw.trim_ascii_end();
 
             if line.is_empty() {
+                snapshot = None;
+
                 return None;
             }
 

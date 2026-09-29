@@ -1,6 +1,6 @@
 use super::*;
-use crate::parse_declarations::Origin;
-use crate::tree_of::{tree_of, Tree};
+use crate::parse_declarations::{parse_declarations, Origin};
+use crate::tree_of::{link_directory, tree_of, Tree};
 use crate::walk_scope::{walk_scope, ScopeOptions};
 use std::collections::BTreeMap;
 use std::fs;
@@ -68,6 +68,26 @@ fn in_snapshot(declaration: Declaration, snapshot: usize) -> Declaration {
             },
         },
     }
+}
+
+fn parsed_of(tree: &Tree, text: &str) -> Vec<Declaration> {
+    let (declarations, rejected) = parse_declarations(
+        text.as_bytes(),
+        &tree.root,
+        &|path: &Path| path.is_dir(),
+        &|path: &Path| path.exists(),
+    );
+
+    assert!(rejected.is_empty(), "{rejected:?}");
+
+    declarations
+}
+
+fn rename(tree: &Tree, from: &str, to: &str) {
+    let destination = path_of(tree, to);
+
+    fs::create_dir_all(destination.parent().unwrap()).unwrap();
+    fs::rename(path_of(tree, from), destination).unwrap();
 }
 
 fn initialize_git(tree: &Tree) {
@@ -291,7 +311,7 @@ fn reports_a_move_followed_by_a_delete_of_its_destination_as_deleted() {
 }
 
 #[test]
-fn rejects_a_swap_through_a_temporary_name_and_touches_nothing() {
+fn rewrites_a_swap_through_a_temporary_name_both_ways() {
     let tree = tree_of(&[
         ("index.md", "docs/a.md docs/b.md\n"),
         ("docs/a.md", "a"),
@@ -305,11 +325,14 @@ fn rejects_a_swap_through_a_temporary_name_and_touches_nothing() {
     assert_eq!(
         report.lines,
         [
-            "declaration 2: source still exists",
-            "declaration 3: source still exists"
+            "index.md:1:1: docs/a.md -> docs/b.md",
+            "index.md:1:11: docs/b.md -> docs/a.md"
         ]
     );
-    assert!(report.contents.is_empty());
+    assert_eq!(
+        report.contents,
+        contents_of(&[("index.md", "docs/b.md docs/a.md\n")])
+    );
 }
 
 #[test]
@@ -679,5 +702,227 @@ fn preserves_a_suffix_and_a_json_escaped_path() {
             "config.json",
             "{\"a\": \"lib\\\\a.md\", \"b\": \"lib/a.md:12\"}\n"
         )])
+    );
+}
+
+#[test]
+fn deletes_the_content_a_move_overwrites_inside_a_moved_directory() {
+    let tree = tree_of(&[("i.md", "d1/y.md f.md\n"), ("d1/y.md", "y"), ("f.md", "f")]);
+    let first = relocate(&tree, "d1", "d2", 1);
+    let second = relocate(&tree, "f.md", "d2/y.md", 2);
+
+    assert_eq!(
+        report_of(&tree, vec![first, second]).lines,
+        [
+            "i.md:1:1: d1/y.md -> d1/y.md (deleted)",
+            "i.md:1:9: f.md -> d2/y.md"
+        ]
+    );
+}
+
+#[test]
+fn ignores_the_per_file_lines_git_mv_prints_after_a_directory() {
+    let tree = tree_of(&[("i.md", "a.md d1/b.md\n"), ("a.md", ""), ("d1/b.md", "")]);
+
+    rename(&tree, "a.md", "d1/a.md");
+    rename(&tree, "d1", "d2");
+
+    let declarations = parsed_of(
+        &tree,
+        "Renaming a.md to d1/a.md\nRenaming d1 to d2\nRenaming d1/a.md to d2/a.md\nRenaming d1/b.md to d2/b.md\n",
+    );
+
+    assert_eq!(
+        report_of(&tree, declarations).lines,
+        ["i.md:1:1: a.md -> d2/a.md", "i.md:1:6: d1/b.md -> d2/b.md"]
+    );
+}
+
+#[test]
+fn composes_a_cross_filesystem_directory_move_after_a_move_into_it() {
+    let tree = tree_of(&[("i.md", "a.md d1/b.md\n"), ("a.md", ""), ("d1/b.md", "")]);
+
+    rename(&tree, "a.md", "d1/a.md");
+    rename(&tree, "d1", "d2");
+
+    let declarations = parsed_of(
+        &tree,
+        "renamed 'a.md' -> 'd1/a.md'\ncreated directory 'd2'\ncopied 'd1/a.md' -> 'd2/a.md'\ncopied 'd1/b.md' -> 'd2/b.md'\nremoved 'd1/a.md'\nremoved 'd1/b.md'\nremoved directory 'd1'\n",
+    );
+
+    assert_eq!(
+        report_of(&tree, declarations).lines,
+        ["i.md:1:1: a.md -> d2/a.md", "i.md:1:6: d1/b.md -> d2/b.md"]
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn composes_a_case_rename_through_a_temporary_directory() {
+    let tree = tree_of(&[("i.md", "Docs/readme.md\n"), ("Docs/readme.md", "")]);
+    let first = relocate(&tree, "Docs/readme.md", "Docs/README.md", 1);
+    let second = relocate(&tree, "Docs", "tmp", 2);
+    let third = relocate(&tree, "tmp", "docs", 3);
+
+    assert_eq!(
+        report_of(&tree, vec![first, second, third]).lines,
+        ["i.md:1:1: Docs/readme.md -> docs/README.md"]
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn rewrites_a_staged_case_rename() {
+    let tree = tree_of(&[("i.md", "Docs/readme.md\n"), ("Docs/readme.md", "")]);
+
+    rename(&tree, "Docs/readme.md", "Docs/README.md");
+    rename(&tree, "Docs", "docs");
+
+    let declarations = parsed_of(&tree, "R100\tDocs/readme.md\tdocs/README.md\n");
+
+    assert_eq!(
+        report_of(&tree, declarations).lines,
+        ["i.md:1:1: Docs/readme.md -> docs/README.md"]
+    );
+}
+
+#[test]
+fn composes_a_listing_against_an_earlier_move() {
+    let tree = tree_of(&[("i.md", "a.md x.md\n"), ("a.md", "a"), ("x.md", "x")]);
+
+    rename(&tree, "a.md", "b.md");
+    rename(&tree, "b.md", "c.md");
+    rename(&tree, "x.md", "b.md");
+
+    let declarations = parsed_of(
+        &tree,
+        "renamed 'a.md' -> 'b.md'\nR100\tx.md\tb.md\nR100\tb.md\tc.md\n",
+    );
+
+    assert_eq!(
+        report_of(&tree, declarations).lines,
+        ["i.md:1:1: a.md -> c.md", "i.md:1:6: x.md -> b.md"]
+    );
+}
+
+#[test]
+fn reports_a_reference_a_sibling_now_shadows_as_unrewritable() {
+    let tree = tree_of(&[
+        ("README.md", ""),
+        ("lib/README.md", ""),
+        ("docs/x.md", "README.md\n"),
+    ]);
+    let moved = relocate(&tree, "docs/x.md", "lib/x.md", 1);
+
+    assert_eq!(
+        report_of(&tree, vec![moved]).lines,
+        ["lib/x.md:1:1: README.md -> README.md (unrewritable)"]
+    );
+}
+
+#[test]
+fn reports_a_reference_a_new_arrival_would_capture_as_unrewritable() {
+    let tree = tree_of(&[
+        ("README.md", ""),
+        ("other.md", ""),
+        ("docs/x.md", "README.md\n"),
+    ]);
+    let moved = relocate(&tree, "other.md", "docs/README.md", 1);
+
+    assert_eq!(
+        report_of(&tree, vec![moved]).lines,
+        ["docs/x.md:1:1: README.md -> README.md (unrewritable)"]
+    );
+}
+
+#[test]
+fn rewrites_a_move_declared_through_an_in_tree_link() {
+    let tree = tree_of(&[("i.md", "[a](lnk/a.md)\n"), ("real/a.md", "")]);
+
+    if !link_directory(&tree.root.join("real"), &tree.root.join("lnk")) {
+        eprintln!("skipped: links cannot be created here");
+
+        return;
+    }
+
+    let moved = relocate(&tree, "lnk/a.md", "lnk/b.md", 1);
+
+    assert_eq!(
+        report_of(&tree, vec![moved]).lines,
+        ["i.md:1:5: lnk/a.md -> lnk/b.md"]
+    );
+}
+
+#[test]
+fn repairs_an_intermediate_name_and_deletes_beneath_a_moved_directory() {
+    let tree = tree_of(&[
+        ("i.md", "b.md d2/x.md\n"),
+        ("a.md", ""),
+        ("d1/x.md", ""),
+        ("d1/z.md", ""),
+    ]);
+    let first = relocate(&tree, "a.md", "b.md", 1);
+    let second = relocate(&tree, "b.md", "c.md", 2);
+    let third = relocate(&tree, "d1", "d2", 3);
+    let fourth = remove(&tree, "d2/x.md", 4);
+
+    assert_eq!(
+        report_of(&tree, vec![first, second, third, fourth]).lines,
+        [
+            "i.md:1:1: b.md -> c.md",
+            "i.md:1:6: d2/x.md -> d2/x.md (deleted)"
+        ]
+    );
+}
+
+#[test]
+fn infers_a_directory_from_a_listing_that_moved_its_files() {
+    let tree = tree_of(&[("i.md", "src/a/ src/a\n"), ("src/a/x.md", "")]);
+
+    rename(&tree, "src/a/x.md", "lib/x.md");
+    fs::remove_dir(path_of(&tree, "src/a")).unwrap();
+
+    let declarations = parsed_of(&tree, "R100\tsrc/a/x.md\tlib/x.md\n");
+
+    assert_eq!(
+        report_of(&tree, declarations).lines,
+        ["i.md:1:1: src/a/ -> lib/", "i.md:1:8: src/a -> ./lib"]
+    );
+}
+
+#[test]
+fn reports_a_directory_whose_files_were_all_deleted() {
+    let tree = tree_of(&[
+        ("i.md", "d1/s/ d1/a.md\n"),
+        ("d1/a.md", ""),
+        ("d1/s/s.md", ""),
+    ]);
+
+    rename(&tree, "d1", "d2");
+    fs::remove_dir_all(path_of(&tree, "d2/s")).unwrap();
+
+    let declarations = parsed_of(
+        &tree,
+        "Renaming d1 to d2\nRenaming d1/a.md to d2/a.md\nRenaming d1/s/s.md to d2/s/s.md\nrm 'd2/s/s.md'\n",
+    );
+
+    assert_eq!(
+        report_of(&tree, declarations).lines,
+        [
+            "i.md:1:1: d1/s/ -> d1/s (deleted)",
+            "i.md:1:7: d1/a.md -> d2/a.md"
+        ]
+    );
+}
+
+#[test]
+fn accepts_a_name_refilled_after_its_content_moved_away() {
+    let tree = tree_of(&[("i.md", "a.md n.md\n"), ("a.md", "a"), ("n.md", "n")]);
+    let first = relocate(&tree, "a.md", "a-old.md", 1);
+    let second = relocate(&tree, "n.md", "a.md", 2);
+
+    assert_eq!(
+        report_of(&tree, vec![first, second]).lines,
+        ["i.md:1:1: a.md -> a-old.md", "i.md:1:6: n.md -> a.md"]
     );
 }

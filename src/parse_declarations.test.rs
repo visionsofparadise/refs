@@ -1053,3 +1053,18 @@ D	gone.md
             origin.snapshot == Some(1),
     }));
 }
+
+#[test]
+fn ends_a_snapshot_at_a_blank_line() {
+    let (declarations, _) = parse("R100\ta.md\tb.md\n\nR100\tb.md\tc.md\n");
+    let snapshots: Vec<Option<usize>> = declarations
+        .iter()
+        .map(|declaration| match declaration {
+            Declaration::Move { origin, .. } | Declaration::Delete { origin, .. } => {
+                origin.snapshot
+            }
+        })
+        .collect();
+
+    assert_eq!(snapshots, [Some(1), Some(3)]);
+}

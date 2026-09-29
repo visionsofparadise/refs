@@ -1,3 +1,4 @@
+mod compose_declarations;
 mod fix_references;
 mod format_path;
 mod list_references;
