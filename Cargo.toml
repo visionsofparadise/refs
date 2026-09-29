@@ -7,5 +7,14 @@ publish = false
 edition = "2021"
 rust-version = "1.88"
 
+[dependencies]
+pathdiff = "0.2"
+percent-encoding = "2"
+
 [lints.rust]
 nonstandard_style = "deny"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
