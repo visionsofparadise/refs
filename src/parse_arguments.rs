@@ -8,12 +8,16 @@ use crate::walk_scope::ScopeOptions;
     bin_name = "refs",
     version,
     about = "List file references and repair them from declared moves",
-    after_help = "Each reference prints as <file>:<line>:<column>: <token> -> <target>, with (dangling) appended to a dangling one.\n\nExit codes: 0 on success; 1 when --dangling printed a line; 2 on a usage or I/O error."
+    after_help = "Listing prints each reference as <file>:<line>:<column>: <token> -> <target>, with (dangling) appended to a dangling one.
+
+Fix mode (refs - [PATH]...) reads declarations from stdin after the moves and deletes have happened: git diff --name-status [-z], GNU or BSD mv -v, git mv -v, rm -v, git rm, or hand-written R <old> <new> and D <path> lines. It repoints the references those moves broke and prints each rewrite as <file>:<line>:<column>: <old> -> <new>; a reference to a deleted path, to a path outside the scanned paths, or with no faithful rewriting prints with (deleted), (out of scope) or (unrewritable) appended, and a skipped declaration prints to stderr.
+
+Exit codes: 0 on success; 1 when --dangling printed a line, or when a fix left a reference unrepaired or skipped a declaration; 2 on a usage or I/O error."
 )]
 pub struct Arguments {
     #[arg(
         value_name = "PATH",
-        help = "Files and directories to scan [default: .]; a first path of - selects fix mode, which reads move and delete declarations from stdin"
+        help = "Files and directories to scan [default: .]; a first path of - selects fix mode"
     )]
     pub paths: Vec<PathBuf>,
     #[arg(
@@ -27,7 +31,10 @@ pub struct Arguments {
         help = "Keep dangling references only; exit 1 when any is printed"
     )]
     pub dangling: bool,
-    #[arg(long, help = "In fix mode, print the rewrites without writing them")]
+    #[arg(
+        long,
+        help = "In fix mode, print the rewrites and reports without writing any file"
+    )]
     pub dry_run: bool,
     #[arg(
         long,

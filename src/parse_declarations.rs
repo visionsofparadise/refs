@@ -167,12 +167,6 @@ fn parse_name_status(text: &str) -> Option<Result<Parsed, &'static str>> {
     }))
 }
 
-fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
-    haystack
-        .windows(needle.len())
-        .position(|window| window == needle)
-}
-
 fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
     haystack
         .windows(needle.len())

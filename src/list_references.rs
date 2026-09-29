@@ -1,10 +1,10 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::format_path::format_path;
+use crate::map_in_parallel::map_in_parallel;
 use crate::resolve_reference::{is_beneath, is_dangling_shaped, resolve_reference, PathForm};
 use crate::tokenize_references::{tokenize_references, Token};
 use crate::walk_scope::{missing_message_of, read_text, resolve_argument, Scope};
@@ -25,7 +25,7 @@ pub struct Listing {
 
 type Names = Option<HashSet<OsString>>;
 
-struct ExistenceCache {
+pub struct ExistenceCache {
     directories: Mutex<HashMap<PathBuf, Arc<Names>>>,
     paths: Mutex<HashMap<PathBuf, bool>>,
     stat: fn(&Path) -> bool,
@@ -46,7 +46,7 @@ fn names_of(directory: &Path) -> Names {
 }
 
 impl ExistenceCache {
-    fn new(stat: fn(&Path) -> bool) -> Self {
+    pub fn new(stat: fn(&Path) -> bool) -> Self {
         ExistenceCache {
             directories: Mutex::default(),
             paths: Mutex::default(),
@@ -84,7 +84,7 @@ impl ExistenceCache {
         exists
     }
 
-    fn exists(&self, path: &Path) -> bool {
+    pub fn exists(&self, path: &Path) -> bool {
         if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
             let listed = self
                 .names(parent)
@@ -199,42 +199,11 @@ fn list_with(
         cache,
     };
 
-    let next = AtomicUsize::new(0);
-
-    let workers = std::thread::available_parallelism()
-        .map_or(1, usize::from)
-        .min(scope.files.len().max(1));
-
-    let mut results: Vec<(usize, Result<Vec<Listed>, String>)> = std::thread::scope(|threads| {
-        let handles: Vec<_> = (0..workers)
-            .map(|_| {
-                threads.spawn(|| {
-                    let mut results = Vec::new();
-
-                    loop {
-                        let index = next.fetch_add(1, Ordering::Relaxed);
-
-                        let Some(file) = scope.files.get(index) else {
-                            return results;
-                        };
-
-                        results.push((index, list_file(file, &filter)));
-                    }
-                })
-            })
-            .collect();
-
-        handles
-            .into_iter()
-            .flat_map(|handle| handle.join().unwrap())
-            .collect()
-    });
-
-    results.sort_unstable_by_key(|(index, _)| *index);
+    let results = map_in_parallel(&scope.files, |file| list_file(file, &filter));
 
     let mut listing = Listing::default();
 
-    for (_, result) in results {
+    for result in results {
         match result {
             Ok(listed) => listing.listed.extend(listed),
             Err(error) => listing.errors.push(error),

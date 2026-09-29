@@ -19,7 +19,6 @@ pub struct ScopeOptions {
 #[derive(Debug, Default)]
 pub struct Scope {
     pub files: Vec<PathBuf>,
-    #[allow(dead_code)]
     pub entries: HashSet<Vec<String>>,
     pub errors: Vec<String>,
     pub warnings: Vec<String>,

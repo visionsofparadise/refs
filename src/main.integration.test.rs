@@ -2,6 +2,11 @@ use super::*;
 use crate::tree_of::{tree_of, Tree};
 
 fn outcome_of(tree: &Tree, arguments: &[&str]) -> (String, String, i32) {
+    outcome_with_input_of(tree, arguments, "")
+}
+
+fn outcome_with_input_of(tree: &Tree, arguments: &[&str], input: &str) -> (String, String, i32) {
+    let mut stdin = input.as_bytes();
     let mut stdout = Vec::new();
     let mut stderr = Vec::new();
 
@@ -14,6 +19,7 @@ fn outcome_of(tree: &Tree, arguments: &[&str]) -> (String, String, i32) {
         arguments,
         Ok(tree.root.clone()),
         &mut Streams {
+            stdin: &mut stdin,
             stdout: &mut stdout,
             stderr: &mut stderr,
         },
@@ -150,6 +156,91 @@ fn validates_to_paths_before_walking() {
             String::new(),
             "refs: gone: no such file or directory\n".to_string(),
             FAILURE
+        )
+    );
+}
+
+#[test]
+fn previews_a_fix_without_writing_then_writes_it_with_exit_zero() {
+    let tree = tree_of(&[
+        (
+            "index.md",
+            "see docs/a.md
+",
+        ),
+        ("docs/a.md", ""),
+    ]);
+
+    std::fs::rename(tree.root.join("docs/a.md"), tree.root.join("docs/b.md")).unwrap();
+
+    let expected = (
+        "index.md:1:5: docs/a.md -> docs/b.md
+"
+        .to_string(),
+        String::new(),
+        SUCCESS,
+    );
+
+    assert_eq!(
+        outcome_with_input_of(
+            &tree,
+            &["-", "--dry-run"],
+            "R	docs/a.md	docs/b.md
+"
+        ),
+        expected
+    );
+    assert_eq!(
+        std::fs::read_to_string(tree.root.join("index.md")).unwrap(),
+        "see docs/a.md
+"
+    );
+
+    assert_eq!(
+        outcome_with_input_of(
+            &tree,
+            &["-"],
+            "R	docs/a.md	docs/b.md
+"
+        ),
+        expected
+    );
+    assert_eq!(
+        std::fs::read_to_string(tree.root.join("index.md")).unwrap(),
+        "see docs/b.md
+"
+    );
+}
+
+#[test]
+fn reports_deletes_and_skipped_declarations_with_exit_one() {
+    let tree = tree_of(&[
+        (
+            "index.md",
+            "see docs/a.md
+",
+        ),
+        ("docs/b.md", ""),
+    ]);
+
+    assert_eq!(
+        outcome_with_input_of(
+            &tree,
+            &["-"],
+            "D docs/a.md
+bogus
+D docs/b.md
+"
+        ),
+        (
+            "index.md:1:5: docs/a.md -> docs/a.md (deleted)
+"
+            .to_string(),
+            "refs: skipped declaration line 2: unrecognized: bogus
+refs: skipped declaration line 3: path still exists: D docs/b.md
+"
+            .to_string(),
+            FINDINGS
         )
     );
 }

@@ -1,35 +1,39 @@
+mod fix_references;
 mod format_path;
 mod list_references;
+mod map_in_parallel;
 mod parse_arguments;
-#[allow(dead_code)]
 mod parse_declarations;
 mod path_text;
-#[allow(dead_code)]
 mod render_reference;
 mod resolve_reference;
 mod tokenize_references;
 #[cfg(test)]
 mod tree_of;
-#[allow(dead_code)]
 mod unquote;
 mod walk_scope;
+mod write_edits;
 
 use clap::error::ErrorKind;
 use clap::Parser;
 use std::ffi::OsString;
-use std::io::{BufWriter, Write};
+use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
 
+use fix_references::{plan_fix, Finding, Outcome};
 use format_path::format_path;
 use list_references::{list_references, resolve_targets};
 use parse_arguments::{parse_arguments, Arguments, Command};
-use walk_scope::{walk_scope, ScopeOptions};
+use parse_declarations::parse_declarations;
+use walk_scope::{walk_scope, Scope, ScopeOptions};
+use write_edits::write_edits;
 
 const SUCCESS: i32 = 0;
 const FINDINGS: i32 = 1;
 const FAILURE: i32 = 2;
 
 struct Streams<'a> {
+    stdin: &'a mut dyn Read,
     stdout: &'a mut dyn Write,
     stderr: &'a mut dyn Write,
 }
@@ -44,6 +48,121 @@ impl Streams<'_> {
 
         FAILURE
     }
+}
+
+fn report_scope(scope: &Scope, streams: &mut Streams) {
+    for message in scope.warnings.iter().chain(&scope.errors) {
+        streams.report(message);
+    }
+}
+
+fn line_of(finding: &Finding, working_directory: &Path) -> String {
+    let (replacement, kind) = match &finding.outcome {
+        Outcome::Rewritten { replacement } => (replacement.clone(), ""),
+        Outcome::Deleted { target } => (format_path(target, working_directory), " (deleted)"),
+        Outcome::OutOfScope { target } => {
+            (format_path(target, working_directory), " (out of scope)")
+        }
+        Outcome::Unrewritable { target } => {
+            (format_path(target, working_directory), " (unrewritable)")
+        }
+    };
+
+    format!(
+        "{}:{}:{}: {}{} -> {replacement}{kind}",
+        format_path(&finding.file, working_directory),
+        finding.token.line,
+        finding.token.column,
+        finding.token.path,
+        finding.token.suffix,
+    )
+}
+
+fn fix(
+    options: &ScopeOptions,
+    paths: &[PathBuf],
+    dry_run: bool,
+    working_directory: &Path,
+    streams: &mut Streams,
+) -> i32 {
+    let mut input = Vec::new();
+
+    if let Err(error) = streams.stdin.read_to_end(&mut input) {
+        return streams.fail(&format!("stdin: {error}"));
+    }
+
+    let (declarations, mut rejected) = parse_declarations(
+        &input,
+        working_directory,
+        &|path: &Path| path.is_dir(),
+        &|path: &Path| path.exists(),
+    );
+
+    let scope = walk_scope(paths, options, working_directory);
+
+    let plan = match plan_fix(declarations, &scope, working_directory) {
+        Ok(plan) => plan,
+        Err(error) => {
+            report_scope(&scope, streams);
+
+            return streams.fail(&error.to_string());
+        }
+    };
+
+    for finding in &plan.findings {
+        let _ = writeln!(streams.stdout, "{}", line_of(finding, working_directory));
+    }
+
+    for destination in &plan.unscanned {
+        let _ = writeln!(
+            streams.stdout,
+            "{}: outbound references not repointed (out of scope)",
+            format_path(destination, working_directory)
+        );
+    }
+
+    let _ = streams.stdout.flush();
+
+    rejected.extend(plan.rejected);
+
+    for rejection in &rejected {
+        streams.report(&format!(
+            "skipped declaration line {}: {}: {}",
+            rejection.origin.line, rejection.reason, rejection.origin.text
+        ));
+    }
+
+    report_scope(&scope, streams);
+
+    let mut failed = !scope.errors.is_empty();
+
+    if !dry_run {
+        for edit in &plan.edits {
+            if let Err(error) = write_edits(std::slice::from_ref(edit)) {
+                streams.report(&format!(
+                    "{}: {error}",
+                    format_path(&edit.file, working_directory)
+                ));
+
+                failed = true;
+            }
+        }
+    }
+
+    if failed {
+        return FAILURE;
+    }
+
+    let unrepaired = plan
+        .findings
+        .iter()
+        .any(|finding| !matches!(finding.outcome, Outcome::Rewritten { .. }));
+
+    if unrepaired || !plan.unscanned.is_empty() || !rejected.is_empty() {
+        return FINDINGS;
+    }
+
+    SUCCESS
 }
 
 fn list(
@@ -84,12 +203,9 @@ fn list(
 
     let _ = streams.stdout.flush();
 
-    for message in scope
-        .warnings
-        .iter()
-        .chain(&scope.errors)
-        .chain(&listing.errors)
-    {
+    report_scope(&scope, streams);
+
+    for message in &listing.errors {
         streams.report(message);
     }
 
@@ -129,14 +245,8 @@ fn run(
         }
     };
 
-    let (options, paths, to, dangling) = match parse_arguments(arguments) {
-        Ok(Command::List {
-            scope,
-            paths,
-            to,
-            dangling,
-        }) => (scope, paths, to, dangling),
-        Ok(Command::Fix { .. }) => return streams.fail("- is not implemented yet"),
+    let command = match parse_arguments(arguments) {
+        Ok(command) => command,
         Err(message) => return streams.fail(&message),
     };
 
@@ -145,18 +255,32 @@ fn run(
         Err(error) => return streams.fail(&format!("working directory: {error}")),
     };
 
-    list(&options, &paths, &to, dangling, &working_directory, streams)
+    match command {
+        Command::List {
+            scope,
+            paths,
+            to,
+            dangling,
+        } => list(&scope, &paths, &to, dangling, &working_directory, streams),
+        Command::Fix {
+            scope,
+            paths,
+            dry_run,
+        } => fix(&scope, &paths, dry_run, &working_directory, streams),
+    }
 }
 
 fn main() {
     let stdout = std::io::stdout();
     let mut stdout = BufWriter::new(stdout.lock());
     let mut stderr = std::io::stderr();
+    let mut stdin = std::io::stdin().lock();
 
     let code = run(
         std::env::args_os().collect(),
         std::env::current_dir().and_then(dunce::canonicalize),
         &mut Streams {
+            stdin: &mut stdin,
             stdout: &mut stdout,
             stderr: &mut stderr,
         },
