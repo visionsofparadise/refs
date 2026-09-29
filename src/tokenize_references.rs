@@ -8,6 +8,7 @@ pub struct Token {
     pub column: usize,
     pub path: String,
     pub suffix: String,
+    pub at_prefixed: bool,
 }
 
 const BYTE_ORDER_MARK: char = '\u{feff}';
@@ -35,15 +36,28 @@ fn emphasis_length_of(text: &str) -> Option<usize> {
 fn trailing_dots_of(text: &str) -> usize {
     let dots = text.len() - text.trim_end_matches('.').len();
     let last_segment = text.rsplit(is_separator).next().unwrap_or(text);
+    let ellipsis = last_segment.len() >= 3 && last_segment.len() == dots;
 
-    if last_segment.len() == dots {
+    if last_segment == ".." || ellipsis {
         return 0;
     }
 
     dots
 }
 
-fn trim(content: &str, mut start: usize, mut end: usize) -> (usize, usize) {
+fn ends_with_lone_backslash(text: &str) -> bool {
+    text.ends_with('\\') && !text.ends_with("\\\\")
+}
+
+struct Trimmed {
+    start: usize,
+    end: usize,
+    at_prefixed: bool,
+}
+
+fn trim(content: &str, mut start: usize, mut end: usize) -> Trimmed {
+    let mut at_prefixed = false;
+
     loop {
         let text = &content[start..end];
         let dots = trailing_dots_of(text);
@@ -53,12 +67,17 @@ fn trim(content: &str, mut start: usize, mut end: usize) -> (usize, usize) {
             end -= length;
         } else if text.starts_with('@') {
             start += 1;
-        } else if text.ends_with([':', ',']) {
+            at_prefixed = true;
+        } else if text.ends_with([':', ',']) || ends_with_lone_backslash(text) {
             end -= 1;
         } else if dots > 0 {
             end -= dots;
         } else {
-            return (start, end);
+            return Trimmed {
+                start,
+                end,
+                at_prefixed,
+            };
         }
     }
 }
@@ -102,9 +121,21 @@ fn is_git_coordinate(text: &str) -> bool {
     }
 }
 
+fn is_number(text: &str) -> bool {
+    !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
+}
+
+fn is_line_suffix(text: &str) -> bool {
+    match text.split_once(':') {
+        Some((line, column)) => is_number(line) && is_number(column),
+        None => is_number(text),
+    }
+}
+
 fn is_remote(text: &str) -> bool {
-    text.split_once(':')
-        .is_some_and(|(head, _)| head.contains('@'))
+    text.split_once(':').is_some_and(|(head, tail)| {
+        head.contains('@') && !head.contains(is_separator) && !is_line_suffix(tail)
+    })
 }
 
 fn is_excluded(text: &str) -> bool {
@@ -139,11 +170,16 @@ fn find_suffix(text: &str) -> usize {
     }
 }
 
+fn has_dotted_segment(path: &str) -> bool {
+    path.split(is_separator)
+        .any(|segment| segment.ends_with('.') && segment != "." && segment != "..")
+}
+
 fn is_path_shaped(path: &str) -> bool {
     let has_separator = path.contains(is_separator);
     let has_name = path.contains(|character: char| !is_separator(character));
 
-    (has_separator && has_name) || has_interior_dot(path)
+    ((has_separator && has_name) || has_interior_dot(path)) && !has_dotted_segment(path)
 }
 
 fn read_token(
@@ -153,7 +189,12 @@ fn read_token(
     line: usize,
     line_start: usize,
 ) -> Option<Token> {
-    let (start, end) = trim(content, start, end);
+    let Trimmed {
+        start,
+        end,
+        at_prefixed,
+    } = trim(content, start, end);
+
     let text = &content[start..end];
 
     if text.is_empty() || is_excluded(text) {
@@ -173,6 +214,7 @@ fn read_token(
         column: start - line_start + 1,
         path: path.to_string(),
         suffix: suffix.to_string(),
+        at_prefixed,
     })
 }
 

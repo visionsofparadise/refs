@@ -342,3 +342,28 @@ fn records_no_encoded_drive_colon_for_a_literal_colon() {
     assert!(!style_of("file:///C:/x/a.md").encoded_drive_colon);
     assert!(!style_of("file:///C:/my%20dir/a.md").encoded_drive_colon);
 }
+
+#[test]
+fn decodes_escaped_slashes() {
+    let (candidates, style) = resolve(r"sub\/a.md");
+
+    assert!(style.escaped_slashes);
+    assert_eq!(style.separator, '/');
+    assert!(!style.doubled_backslashes);
+    assert_eq!(
+        candidates[0].target,
+        absolute_path_of(&["work", "docs", "sub", "a.md"])
+    );
+    assert!(!style_of("sub/a.md").escaped_slashes);
+}
+
+#[test]
+fn never_reads_a_joined_segment_as_a_prefix() {
+    let normalized = normalize_path(Path::new("a/../C:/x"));
+
+    assert!(!matches!(
+        normalized.components().next(),
+        Some(Component::Prefix(_))
+    ));
+    assert!(!normalized.is_absolute());
+}

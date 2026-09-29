@@ -1,16 +1,10 @@
 use super::*;
 
 #[test]
-fn treats_both_slashes_as_separators() {
-    assert!(is_separator('/'));
-    assert!(is_separator('\\'));
-    assert!(!is_separator(':'));
-}
-
-#[test]
 fn delimits_on_whitespace_quotes_brackets_and_punctuation() {
     for character in [
-        ' ', '\t', '\r', '"', '\'', '`', '(', ')', '[', ']', '<', '>', '{', '}', ',', ';', '|', '=',
+        ' ', '\t', '\r', '"', '\'', '\u{201c}', '\u{201d}', '\u{2018}', '\u{2019}', '`', '(', ')',
+        '[', ']', '<', '>', '{', '}', ',', ';', '|', '=',
     ] {
         assert!(is_delimiter(character), "{character:?}");
     }

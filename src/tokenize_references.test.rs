@@ -148,11 +148,16 @@ fn excludes_a_file_url_with_a_host() {
 }
 
 #[test]
-fn keeps_trailing_dots_after_a_dot_or_separator() {
+fn keeps_a_trailing_parent_segment() {
     assert_eq!(
-        paths_of(r"up ../.. here src/. and C:\x\.. end"),
-        vec!["../..", "src/.", r"C:\x\.."]
+        paths_of(r"up ../.. and C:\x\.. end"),
+        vec!["../..", r"C:\x\.."]
     );
+}
+
+#[test]
+fn trims_a_trailing_current_segment_dot() {
+    assert_eq!(paths_of("see src/components/."), vec!["src/components/"]);
 }
 
 #[test]
@@ -186,4 +191,50 @@ fn excludes_scp_style_remotes() {
 #[test]
 fn excludes_file_urls_without_an_authority() {
     assert!(tokenize_references("file:x.md file:/x.md").is_empty());
+}
+
+#[test]
+fn trims_a_trailing_lone_backslash_and_keeps_a_doubled_one() {
+    let content = r#"{"build":"tsc -p \"tsconfig.build.json\"","doc":"open \"docs/a.md\""}"#;
+
+    assert_eq!(paths_of(content), vec!["tsconfig.build.json", "docs/a.md"]);
+    assert_eq!(paths_of(r#""C:\\x\\""#), vec![r"C:\\x\\"]);
+}
+
+#[test]
+fn ignores_ellipses_and_dot_ended_segments() {
+    assert!(tokenize_references("... refs [<path>...] docs/... a./b.md").is_empty());
+}
+
+#[test]
+fn delimits_on_typographic_quotes() {
+    assert_eq!(
+        paths_of("\u{201c}src/a.md\u{201d} and docs/a.md\u{2019}s \u{2018}lib/b.md\u{2019}"),
+        vec!["src/a.md", "docs/a.md", "lib/b.md"]
+    );
+}
+
+#[test]
+fn records_a_trimmed_leading_at_sign() {
+    let tokens = tokenize_references("@src/a.md src/b.md @scope/pkg/file.js");
+
+    assert_eq!(
+        tokens
+            .iter()
+            .map(|token| token.at_prefixed)
+            .collect::<Vec<_>>(),
+        vec![true, false, true]
+    );
+}
+
+#[test]
+fn keeps_at_signs_in_paths_with_a_line_suffix() {
+    assert_eq!(
+        parts_of("node_modules/@types/node/index.d.ts:12:3 assets/icon@2x.png:4 me@x.md:12"),
+        vec![
+            part_of("node_modules/@types/node/index.d.ts", ":12:3"),
+            part_of("assets/icon@2x.png", ":4"),
+            part_of("me@x.md", ":12")
+        ]
+    );
 }

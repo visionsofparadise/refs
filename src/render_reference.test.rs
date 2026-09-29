@@ -1,6 +1,7 @@
 use super::*;
-use std::fs;
 use std::path::PathBuf;
+
+const ABSENT_ROOT: &str = "refs-absent-root";
 
 fn absolute_path_of(names: &[&str]) -> PathBuf {
     let mut path = if cfg!(windows) {
@@ -8,6 +9,8 @@ fn absolute_path_of(names: &[&str]) -> PathBuf {
     } else {
         PathBuf::from("/")
     };
+
+    path.push(ABSENT_ROOT);
 
     for name in names {
         path.push(name);
@@ -20,6 +23,7 @@ fn create_plain_style() -> PathStyle {
     PathStyle {
         separator: '/',
         doubled_backslashes: false,
+        escaped_slashes: false,
         dot_prefix: false,
         trailing_separator: false,
         percent_encoded: false,
@@ -245,7 +249,7 @@ fn renders_drive_and_msys_absolute_paths_in_their_written_case() {
             backslashed
         )
         .as_deref(),
-        Some("C:\\x\\deep\\a.md")
+        Some("C:\\refs-absent-root\\x\\deep\\a.md")
     );
     assert_eq!(
         render(
@@ -254,11 +258,11 @@ fn renders_drive_and_msys_absolute_paths_in_their_written_case() {
             lowercase.clone()
         )
         .as_deref(),
-        Some("c:/x/deep/a.md")
+        Some("c:/refs-absent-root/x/deep/a.md")
     );
     assert_eq!(
         render(target, PathForm::Absolute(AbsoluteStyle::Msys), lowercase).as_deref(),
-        Some("/c/x/deep/a.md")
+        Some("/c/refs-absent-root/x/deep/a.md")
     );
     assert_eq!(
         render(
@@ -267,7 +271,7 @@ fn renders_drive_and_msys_absolute_paths_in_their_written_case() {
             create_plain_style()
         )
         .as_deref(),
-        Some("/C/x/deep/a.md")
+        Some("/C/refs-absent-root/x/deep/a.md")
     );
 }
 
@@ -287,7 +291,7 @@ fn renders_a_drive_file_url() {
             style
         )
         .as_deref(),
-        Some("FILE:///C:/x/a.md")
+        Some("FILE:///C:/refs-absent-root/x/a.md")
     );
 }
 
@@ -308,7 +312,7 @@ fn renders_a_percent_encoded_drive_file_url_keeping_the_drive_colon() {
             style
         )
         .as_deref(),
-        Some("file:///C:/my%20dir/a.md")
+        Some("file:///C:/refs-absent-root/my%20dir/a.md")
     );
 }
 
@@ -331,7 +335,7 @@ fn renders_an_encoded_drive_colon_as_written() {
             style
         )
         .as_deref(),
-        Some("file:///c%3A/Users/a.md")
+        Some("file:///c%3A/refs-absent-root/Users/a.md")
     );
 }
 
@@ -344,8 +348,8 @@ fn reports_a_relative_rendering_across_drives_as_unrewritable() {
             &PathForm::FileRelative,
             &create_plain_style(),
             "",
-            Path::new("C:\\work"),
-            Path::new("C:\\work"),
+            Path::new("C:\\refs-absent-root"),
+            Path::new("C:\\refs-absent-root"),
         ),
         None
     );
@@ -361,7 +365,7 @@ fn renders_a_posix_absolute_path() {
             create_plain_style()
         )
         .as_deref(),
-        Some("/x/deep/a.md")
+        Some("/refs-absent-root/x/deep/a.md")
     );
 }
 
@@ -381,7 +385,7 @@ fn renders_a_posix_file_url() {
             style
         )
         .as_deref(),
-        Some("file:///x/a.md")
+        Some("file:///refs-absent-root/x/a.md")
     );
 }
 
@@ -401,36 +405,6 @@ fn renders_a_working_directory_form_when_the_referrer_is_the_working_directory()
         .as_deref(),
         Some("docs/a.md")
     );
-}
-
-#[test]
-fn reports_a_rendering_an_earlier_existing_candidate_would_shadow() {
-    let root = std::env::temp_dir().join(format!("refs-render-shadow-{}", std::process::id()));
-    let notes = root.join("notes");
-    let shadow = notes.join("x").join("b.md");
-
-    let render_into_root = || {
-        render_reference(
-            &root.join("x").join("b.md"),
-            &PathForm::WorkingDirectoryRelative,
-            &create_plain_style(),
-            "",
-            &notes,
-            &root,
-        )
-    };
-
-    fs::create_dir_all(shadow.parent().unwrap()).unwrap();
-
-    assert_eq!(render_into_root().as_deref(), Some("x/b.md"));
-
-    fs::write(&shadow, "").unwrap();
-
-    let shadowed = render_into_root();
-
-    fs::remove_dir_all(&root).unwrap();
-
-    assert_eq!(shadowed, None);
 }
 
 #[test]
@@ -489,6 +463,19 @@ fn renders_a_posix_file_url_in_its_written_scheme_case() {
             style
         )
         .as_deref(),
-        Some("FILE:///x/a.md")
+        Some("FILE:///refs-absent-root/x/a.md")
+    );
+}
+
+#[test]
+fn renders_escaped_slashes() {
+    let style = PathStyle {
+        escaped_slashes: true,
+        ..create_plain_style()
+    };
+
+    assert_eq!(
+        render_file_relative(&["work", "notes", "lib", "b.md"], style).as_deref(),
+        Some("lib\\/b.md")
     );
 }

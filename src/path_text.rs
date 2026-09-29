@@ -7,6 +7,10 @@ pub fn is_delimiter(character: char) -> bool {
         || matches!(
             character,
             '"' | '\''
+                | '\u{201c}'
+                | '\u{201d}'
+                | '\u{2018}'
+                | '\u{2019}'
                 | '`'
                 | '('
                 | ')'

@@ -232,6 +232,10 @@ pub fn render_reference(
         rendered = rendered.replace('\\', "\\\\");
     }
 
+    if style.escaped_slashes {
+        rendered = rendered.replace('/', "\\/");
+    }
+
     if style.file_scheme {
         let scheme = if style.scheme.is_empty() {
             "file"
@@ -264,3 +268,7 @@ pub fn render_reference(
 #[cfg(test)]
 #[path = "render_reference.test.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "render_reference.integration.test.rs"]
+mod integration;

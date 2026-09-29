@@ -25,6 +25,7 @@ pub enum PathForm {
 pub struct PathStyle {
     pub separator: char,
     pub doubled_backslashes: bool,
+    pub escaped_slashes: bool,
     pub dot_prefix: bool,
     pub trailing_separator: bool,
     pub percent_encoded: bool,
@@ -71,6 +72,17 @@ pub fn normalize_path(path: &Path) -> PathBuf {
     }
 
     let mut normalized = root;
+
+    let reads_as_prefix = cfg!(windows)
+        && normalized.is_empty()
+        && names
+            .first()
+            .is_some_and(|name| name.to_string_lossy().contains(':'));
+
+    if reads_as_prefix {
+        normalized.push(".");
+        normalized.push(MAIN_SEPARATOR_STR);
+    }
 
     for (index, name) in names.iter().enumerate() {
         if index > 0 {
@@ -308,12 +320,14 @@ pub fn resolve_reference(
 ) -> (Vec<Candidate>, PathStyle) {
     let (scheme, path) = split_file_scheme(path);
     let file_scheme = scheme.is_some();
+    let escaped_slashes = path.contains("\\/");
+    let path = path.replace("\\/", "/");
     let doubled_backslashes = path.contains("\\\\");
 
     let undoubled = if doubled_backslashes {
         path.replace("\\\\", "\\")
     } else {
-        path.to_string()
+        path
     };
 
     let decoded = if escapes_of(&undoubled).next().is_some() {
@@ -337,6 +351,7 @@ pub fn resolve_reference(
     let style = PathStyle {
         separator: separator_of(path),
         doubled_backslashes,
+        escaped_slashes,
         dot_prefix: path.starts_with("./") || path.starts_with(".\\"),
         trailing_separator: path.ends_with(is_separator),
         percent_encoded,
