@@ -13,24 +13,83 @@ pub struct Token {
 
 const BYTE_ORDER_MARK: char = '\u{feff}';
 
-const EMPHASIS_MARKERS: [&str; 2] = ["**", "*"];
+const EMPHASIS_MARKERS: [&str; 3] = ["**", "*", "~~"];
 
-fn emphasis_length_of(text: &str) -> Option<usize> {
-    let marker = EMPHASIS_MARKERS.iter().find(|marker| {
-        text.len() >= 2 * marker.len() && text.starts_with(*marker) && text.ends_with(*marker)
-    });
+const DELIMITING_ENTITIES: [&str; 5] = ["&quot;", "&apos;", "&#39;", "&lt;", "&gt;"];
 
-    if let Some(marker) = marker {
-        return Some(marker.len());
+fn delimiter_length_of(rest: &str) -> usize {
+    match rest.chars().next() {
+        Some(character) if is_delimiter(character) => character.len_utf8(),
+        _ => DELIMITING_ENTITIES
+            .iter()
+            .find(|entity| rest.starts_with(*entity))
+            .map_or(0, |entity| entity.len()),
+    }
+}
+
+fn bracket_segment_length_of(content: &str, index: usize) -> Option<usize> {
+    let close = match content[index..].chars().next()? {
+        '(' => ')',
+        '[' => ']',
+        _ => return None,
+    };
+
+    if !content[..index].ends_with(is_separator) {
+        return None;
     }
 
-    let single_underscore = text.len() >= 2
-        && text.starts_with('_')
-        && text.ends_with('_')
-        && !text.starts_with("__")
-        && !text.ends_with("__");
+    for (offset, character) in content[index + 1..].char_indices() {
+        let end = index + 1 + offset + character.len_utf8();
 
-    single_underscore.then_some(1)
+        if character == close {
+            return content[end..]
+                .starts_with(is_separator)
+                .then_some(end - index);
+        }
+
+        if is_separator(character) || delimiter_length_of(&content[index + 1 + offset..]) > 0 {
+            return None;
+        }
+    }
+
+    None
+}
+
+fn is_text(character: Option<char>) -> bool {
+    character.is_some_and(|character| !is_separator(character) && !matches!(character, '*' | '~'))
+}
+
+fn leading_emphasis_of(text: &str) -> usize {
+    let marker = EMPHASIS_MARKERS
+        .iter()
+        .find(|marker| text.starts_with(*marker) && is_text(text[marker.len()..].chars().next()));
+
+    if let Some(marker) = marker {
+        return marker.len();
+    }
+
+    let paired_underscore = text.len() >= 2
+        && text.starts_with('_')
+        && !text.starts_with("__")
+        && text.ends_with('_')
+        && trailing_emphasis_of(text) == 1
+        && is_text(text[1..].chars().next());
+
+    usize::from(paired_underscore)
+}
+
+fn trailing_emphasis_of(text: &str) -> usize {
+    let touches_text = |length: usize| is_text(text[..text.len() - length].chars().next_back());
+
+    let marker = EMPHASIS_MARKERS
+        .iter()
+        .find(|marker| text.ends_with(*marker) && touches_text(marker.len()));
+
+    if let Some(marker) = marker {
+        return marker.len();
+    }
+
+    usize::from(text.ends_with('_') && !text.ends_with("__") && touches_text(1))
 }
 
 fn trailing_dots_of(text: &str) -> usize {
@@ -45,8 +104,10 @@ fn trailing_dots_of(text: &str) -> usize {
     dots
 }
 
-fn ends_with_lone_backslash(text: &str) -> bool {
-    text.ends_with('\\') && !text.ends_with("\\\\")
+fn has_odd_trailing_backslashes(text: &str) -> bool {
+    let backslashes = text.len() - text.trim_end_matches('\\').len();
+
+    backslashes % 2 == 1
 }
 
 struct Trimmed {
@@ -60,15 +121,25 @@ fn trim(content: &str, mut start: usize, mut end: usize) -> Trimmed {
 
     loop {
         let text = &content[start..end];
+        let leading = leading_emphasis_of(text);
+        let trailing = trailing_emphasis_of(text);
         let dots = trailing_dots_of(text);
 
-        if let Some(length) = emphasis_length_of(text) {
-            start += length;
-            end -= length;
+        if leading > 0 {
+            start += leading;
+        } else if trailing > 0 {
+            end -= trailing;
         } else if text.starts_with('@') {
             start += 1;
             at_prefixed = true;
-        } else if text.ends_with([':', ',']) || ends_with_lone_backslash(text) {
+        } else if text.starts_with('!') {
+            start += 1;
+        } else if let Some(mark) = ['!', '…', ':']
+            .into_iter()
+            .find(|mark| text.ends_with(*mark))
+        {
+            end -= mark.len_utf8();
+        } else if has_odd_trailing_backslashes(text) {
             end -= 1;
         } else if dots > 0 {
             end -= dots;
@@ -138,9 +209,35 @@ fn is_remote(text: &str) -> bool {
     })
 }
 
+fn is_batch_variable(text: &str) -> bool {
+    let Some(rest) = text.strip_prefix('%') else {
+        return false;
+    };
+
+    if rest.starts_with('~') {
+        return true;
+    }
+
+    let bytes = rest.as_bytes();
+    let is_escape =
+        bytes.len() >= 2 && bytes[0].is_ascii_hexdigit() && bytes[1].is_ascii_hexdigit();
+
+    let name_length = rest
+        .find(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .unwrap_or(rest.len());
+
+    let is_named = bytes
+        .first()
+        .is_some_and(|first| first.is_ascii_alphabetic() || *first == b'_')
+        && rest[name_length..].starts_with('%');
+
+    is_named && !(is_escape && name_length == 2)
+}
+
 fn is_excluded(text: &str) -> bool {
     text.contains('*')
-        || text.starts_with('~')
+        || text.starts_with(['~', '$'])
+        || is_batch_variable(text)
         || is_git_coordinate(text)
         || has_foreign_scheme(text)
         || is_remote(text)
@@ -182,6 +279,10 @@ fn is_path_shaped(path: &str) -> bool {
     ((has_separator && has_name) || has_interior_dot(path)) && !has_dotted_segment(path)
 }
 
+fn follows_an_expansion(content: &str, start: usize) -> bool {
+    content[..start].ends_with(['}', ')'])
+}
+
 fn read_token(
     content: &str,
     start: usize,
@@ -189,6 +290,10 @@ fn read_token(
     line: usize,
     line_start: usize,
 ) -> Option<Token> {
+    if follows_an_expansion(content, start) {
+        return None;
+    }
+
     let Trimmed {
         start,
         end,
@@ -229,12 +334,24 @@ pub fn tokenize_references(content: &str) -> Vec<Token> {
     let mut line = 1;
     let mut line_start = offset;
     let mut run_start: Option<usize> = None;
+    let mut index = offset;
 
-    for (index, character) in content[offset..].char_indices() {
-        let index = index + offset;
-
-        if !is_delimiter(character) {
+    while index < content.len() {
+        if let Some(length) = bracket_segment_length_of(content, index) {
             run_start.get_or_insert(index);
+
+            index += length;
+
+            continue;
+        }
+
+        let rest = &content[index..];
+        let delimiter = delimiter_length_of(rest);
+
+        if delimiter == 0 {
+            run_start.get_or_insert(index);
+
+            index += rest.chars().next().map_or(1, char::len_utf8);
 
             continue;
         }
@@ -243,10 +360,12 @@ pub fn tokenize_references(content: &str) -> Vec<Token> {
             tokens.extend(read_token(content, start, index, line, line_start));
         }
 
-        if character == '\n' {
+        if rest.starts_with('\n') {
             line += 1;
             line_start = index + 1;
         }
+
+        index += delimiter;
     }
 
     if let Some(start) = run_start {

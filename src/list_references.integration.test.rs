@@ -142,3 +142,10 @@ fn orders_by_file_then_line_then_column() {
         ]
     );
 }
+
+#[test]
+fn never_flags_a_token_without_candidates_as_dangling() {
+    let tree = tree_of(&[("index.md", "see a%2Fb/c.md and x/a:b.md")]);
+
+    assert!(lines_of(&tree, &[], false).is_empty());
+}

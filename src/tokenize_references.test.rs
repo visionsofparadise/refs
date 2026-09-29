@@ -94,10 +94,23 @@ fn ignores_bare_names_and_dotfiles() {
 }
 
 #[test]
-fn trims_trailing_punctuation() {
+fn trims_trailing_periods_and_colons() {
     assert_eq!(
-        paths_of("see docs/a.md. then src/b.md, done"),
+        paths_of("see docs/a.md. then src/b.md: done"),
         vec!["docs/a.md", "src/b.md"]
+    );
+}
+
+#[test]
+fn delimits_on_a_comma() {
+    let tokens = tokenize_references("docs/a.md,src/b.md");
+
+    assert_eq!(
+        tokens
+            .iter()
+            .map(|token| (token.path.as_str(), token.start, token.end))
+            .collect::<Vec<_>>(),
+        vec![("docs/a.md", 0, 9), ("src/b.md", 10, 18)]
     );
 }
 
@@ -194,11 +207,15 @@ fn excludes_file_urls_without_an_authority() {
 }
 
 #[test]
-fn trims_a_trailing_lone_backslash_and_keeps_a_doubled_one() {
+fn trims_one_backslash_from_an_odd_trailing_run() {
     let content = r#"{"build":"tsc -p \"tsconfig.build.json\"","doc":"open \"docs/a.md\""}"#;
 
     assert_eq!(paths_of(content), vec!["tsconfig.build.json", "docs/a.md"]);
     assert_eq!(paths_of(r#""C:\\x\\""#), vec![r"C:\\x\\"]);
+    assert_eq!(
+        paths_of(r#"{"cmd": "robocopy \"src\\dir\\\" x"}"#),
+        vec![r"src\\dir\\"]
+    );
 }
 
 #[test]
@@ -237,4 +254,65 @@ fn keeps_at_signs_in_paths_with_a_line_suffix() {
             part_of("me@x.md", ":12")
         ]
     );
+}
+
+#[test]
+fn trims_emphasis_spanning_words() {
+    assert_eq!(
+        paths_of("**Read docs/a.md** *see src/b.md* _see lib/c.md_ ~~see old/d.md~~"),
+        vec!["docs/a.md", "src/b.md", "lib/c.md", "old/d.md"]
+    );
+}
+
+#[test]
+fn keeps_emphasis_markers_that_touch_a_separator() {
+    assert!(tokenize_references("**/dist/** *src/*").is_empty());
+    assert_eq!(paths_of("_site/_"), vec!["_site/_"]);
+}
+
+#[test]
+fn trims_negation_and_exclamation_marks() {
+    assert_eq!(
+        paths_of("!dist/keep.js see docs/a.md! and src/b.md\u{2026}"),
+        vec!["dist/keep.js", "docs/a.md", "src/b.md"]
+    );
+}
+
+#[test]
+fn delimits_on_html_entities() {
+    assert_eq!(
+        paths_of("&quot;docs/a.md&quot; &apos;src/b.md&#39; &lt;lib/c.md&gt;"),
+        vec!["docs/a.md", "src/b.md", "lib/c.md"]
+    );
+}
+
+#[test]
+fn keeps_a_bracketed_segment_between_separators() {
+    assert_eq!(
+        paths_of("app/(marketing)/about/page.tsx src/routes/[slug]/+page.svelte"),
+        vec![
+            "app/(marketing)/about/page.tsx",
+            "src/routes/[slug]/+page.svelte"
+        ]
+    );
+}
+
+#[test]
+fn delimits_brackets_outside_a_segment() {
+    assert_eq!(
+        paths_of("[a.md](docs/a.md) (src/b.md)"),
+        vec!["a.md", "docs/a.md", "src/b.md"]
+    );
+}
+
+#[test]
+fn excludes_shell_and_batch_expansions() {
+    let content = "$HOME/a.md ${ROOT}/bin/x.sh $(pwd)/../lib/y.js ${{ github.workspace }}/bin/z.sh %APPDATA%/x.json %~dp0\\tool.exe";
+
+    assert_eq!(paths_of(content), vec!["github.workspace"]);
+}
+
+#[test]
+fn keeps_a_percent_encoded_path_that_looks_like_a_batch_variable() {
+    assert_eq!(paths_of("%C3%A9t%C3%A9.md"), vec!["%C3%A9t%C3%A9.md"]);
 }

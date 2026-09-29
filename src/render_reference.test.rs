@@ -48,6 +48,7 @@ fn render_with_suffix(
         suffix,
         &absolute_path_of(&["work", "notes"]),
         &absolute_path_of(&["work"]),
+        &|_| false,
     )
 }
 
@@ -350,6 +351,7 @@ fn reports_a_relative_rendering_across_drives_as_unrewritable() {
             "",
             Path::new("C:\\refs-absent-root"),
             Path::new("C:\\refs-absent-root"),
+            &|_| false,
         ),
         None
     );
@@ -401,6 +403,7 @@ fn renders_a_working_directory_form_when_the_referrer_is_the_working_directory()
             "",
             &work,
             &work,
+            &|_| false,
         )
         .as_deref(),
         Some("docs/a.md")
@@ -478,4 +481,36 @@ fn renders_escaped_slashes() {
         render_file_relative(&["work", "notes", "lib", "b.md"], style).as_deref(),
         Some("lib\\/b.md")
     );
+}
+
+#[test]
+fn prefixes_a_lone_name_that_would_not_be_a_token() {
+    assert_eq!(
+        render_file_relative(&["work", "notes", "components"], create_plain_style()).as_deref(),
+        Some("./components")
+    );
+    assert_eq!(
+        render_file_relative(&["work", "notes", "LICENSE"], create_plain_style()).as_deref(),
+        Some("./LICENSE")
+    );
+}
+
+#[test]
+fn checks_earlier_candidates_through_the_given_exists() {
+    let shadow = absolute_path_of(&["work", "notes", "x", "b.md"]);
+
+    let render_with = |exists: &dyn Fn(&Path) -> bool| {
+        render_reference(
+            &absolute_path_of(&["work", "x", "b.md"]),
+            &PathForm::WorkingDirectoryRelative,
+            &create_plain_style(),
+            "",
+            &absolute_path_of(&["work", "notes"]),
+            &absolute_path_of(&["work"]),
+            exists,
+        )
+    };
+
+    assert_eq!(render_with(&|_| false).as_deref(), Some("x/b.md"));
+    assert_eq!(render_with(&|path| path == shadow), None);
 }

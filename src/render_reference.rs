@@ -1,6 +1,7 @@
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use std::path::{Component, Path};
 
+use crate::path_text::has_interior_dot;
 use crate::resolve_reference::{key_of, resolve_reference, AbsoluteStyle, PathForm, PathStyle};
 use crate::tokenize_references::tokenize_references;
 
@@ -51,8 +52,10 @@ fn diff_names(target: &Path, base: &Path) -> Option<Vec<String>> {
 fn split_relative(target: &Path, base: &Path, style: &PathStyle) -> Option<(String, Vec<String>)> {
     let names = diff_names(target, base)?;
     let bare = names[0] == ".." || names[0] == ".";
+    let lone =
+        names.len() == 1 && !bare && !has_interior_dot(&names[0]) && !style.trailing_separator;
 
-    let head = if style.dot_prefix && !bare {
+    let head = if (style.dot_prefix && !bare) || lone {
         format!(".{}", style.separator)
     } else {
         String::new()
@@ -154,6 +157,7 @@ fn round_trips(
     form: &PathForm,
     referrer_directory: &Path,
     working_directory: &Path,
+    exists: &dyn Fn(&Path) -> bool,
 ) -> bool {
     let text = format!("{rendered}{suffix}");
     let tokens = tokenize_references(&text);
@@ -181,7 +185,7 @@ fn round_trips(
             return true;
         }
 
-        if candidate.target.exists() {
+        if exists(&candidate.target) {
             return false;
         }
     }
@@ -196,6 +200,7 @@ pub fn render_reference(
     suffix: &str,
     referrer_directory: &Path,
     working_directory: &Path,
+    exists: &dyn Fn(&Path) -> bool,
 ) -> Option<String> {
     let (head, names) = match form {
         PathForm::FileRelative => split_relative(target, referrer_directory, style)?,
@@ -258,6 +263,7 @@ pub fn render_reference(
         form,
         referrer_directory,
         working_directory,
+        exists,
     ) {
         return None;
     }

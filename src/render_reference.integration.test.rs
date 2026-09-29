@@ -30,6 +30,7 @@ fn reports_a_rendering_an_earlier_existing_candidate_would_shadow() {
             "",
             &notes,
             root,
+            &|path: &Path| path.exists(),
         )
     };
 
