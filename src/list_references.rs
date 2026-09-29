@@ -1,5 +1,6 @@
 use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
+use std::hash::{BuildHasher, RandomState};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -7,7 +8,7 @@ use crate::format_path::format_path;
 use crate::map_in_parallel::map_in_parallel;
 use crate::resolve_reference::{is_beneath, is_dangling_shaped, resolve_reference, PathForm};
 use crate::tokenize_references::{tokenize_references, Token};
-use crate::walk_scope::{missing_message_of, read_text, resolve_argument, Scope};
+use crate::walk_scope::{locate_argument, read_text, Scope};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Listed {
@@ -25,13 +26,46 @@ pub struct Listing {
 
 type Names = Option<HashSet<OsString>>;
 
-pub struct ExistenceCache {
-    directories: Mutex<HashMap<PathBuf, Arc<Names>>>,
-    paths: Mutex<HashMap<PathBuf, bool>>,
-    stat: fn(&Path) -> bool,
+const SHARDS: usize = 64;
+
+struct ShardedMap<V> {
+    shards: Vec<Mutex<HashMap<PathBuf, V>>>,
+    hasher: RandomState,
 }
 
-fn names_of(directory: &Path) -> Names {
+impl<V: Clone> ShardedMap<V> {
+    fn new() -> Self {
+        ShardedMap {
+            shards: (0..SHARDS).map(|_| Mutex::default()).collect(),
+            hasher: RandomState::new(),
+        }
+    }
+
+    fn get_or_insert_with(&self, path: &Path, create: impl FnOnce() -> V) -> V {
+        let shard = &self.shards[self.hasher.hash_one(path) as usize % SHARDS];
+
+        if let Some(value) = shard.lock().unwrap().get(path) {
+            return value.clone();
+        }
+
+        let value = create();
+
+        shard
+            .lock()
+            .unwrap()
+            .insert(path.to_path_buf(), value.clone());
+
+        value
+    }
+}
+
+pub struct ExistenceCache {
+    directories: ShardedMap<Arc<Names>>,
+    paths: ShardedMap<bool>,
+    probe: fn(&Path) -> bool,
+}
+
+fn read_names(directory: &Path) -> Names {
     let entries = std::fs::read_dir(directory).ok()?;
 
     Some(
@@ -46,48 +80,27 @@ fn names_of(directory: &Path) -> Names {
 }
 
 impl ExistenceCache {
-    pub fn new(stat: fn(&Path) -> bool) -> Self {
+    pub fn new(probe: fn(&Path) -> bool) -> Self {
         ExistenceCache {
-            directories: Mutex::default(),
-            paths: Mutex::default(),
-            stat,
+            directories: ShardedMap::new(),
+            paths: ShardedMap::new(),
+            probe,
         }
     }
 
-    fn names(&self, directory: &Path) -> Arc<Names> {
-        if let Some(names) = self.directories.lock().unwrap().get(directory) {
-            return Arc::clone(names);
-        }
-
-        let names = Arc::new(names_of(directory));
-
+    fn names_of(&self, directory: &Path) -> Arc<Names> {
         self.directories
-            .lock()
-            .unwrap()
-            .insert(directory.to_path_buf(), Arc::clone(&names));
-
-        names
+            .get_or_insert_with(directory, || Arc::new(read_names(directory)))
     }
 
     fn stat(&self, path: &Path) -> bool {
-        if let Some(known) = self.paths.lock().unwrap().get(path) {
-            return *known;
-        }
-
-        let exists = (self.stat)(path);
-
-        self.paths
-            .lock()
-            .unwrap()
-            .insert(path.to_path_buf(), exists);
-
-        exists
+        self.paths.get_or_insert_with(path, || (self.probe)(path))
     }
 
     pub fn exists(&self, path: &Path) -> bool {
         if let (Some(parent), Some(name)) = (path.parent(), path.file_name()) {
             let listed = self
-                .names(parent)
+                .names_of(parent)
                 .as_ref()
                 .as_ref()
                 .is_some_and(|names| names.contains(name));
@@ -165,23 +178,15 @@ pub fn resolve_targets(
     to: &[PathBuf],
     working_directory: &Path,
 ) -> Result<Vec<PathBuf>, Vec<String>> {
-    let mut resolved = Vec::new();
-    let mut errors = Vec::new();
-
-    for path in to {
-        match resolve_argument(path, working_directory) {
-            None => errors.push(format!("{}: unsupported path", path.display())),
-            Some(target) => match target.symlink_metadata() {
-                Ok(_) => resolved.push(target),
-                Err(error) => errors.push(missing_message_of(&target, &error, working_directory)),
-            },
-        }
-    }
+    let (resolved, errors): (Vec<_>, Vec<_>) = to
+        .iter()
+        .map(|path| locate_argument(path, working_directory))
+        .partition(Result::is_ok);
 
     if errors.is_empty() {
-        Ok(resolved)
+        Ok(resolved.into_iter().flatten().collect())
     } else {
-        Err(errors)
+        Err(errors.into_iter().filter_map(Result::err).collect())
     }
 }
 

@@ -1,5 +1,5 @@
 use super::*;
-use crate::tree_of::{tree_of, Tree};
+use crate::tree_of::{link_directory, tree_of, Tree};
 use crate::walk_scope::{walk_scope, ScopeOptions};
 use std::fs;
 
@@ -326,4 +326,40 @@ fn agrees_with_path_exists_on_short_names_and_device_names() {
 
         assert_eq!(cache.exists(&path), path.exists(), "{name}");
     }
+}
+
+#[test]
+fn matches_a_to_path_through_a_directory_link() {
+    let (_tree, work) = work_tree_of(&[
+        ("a.md", "docs/b.md other.md\n"),
+        ("docs/b.md", ""),
+        ("other.md", ""),
+    ]);
+
+    if !link_directory(&work.join("docs"), &work.join("linked")) {
+        eprintln!("skipped: this user cannot create a directory link");
+
+        return;
+    }
+
+    assert_eq!(
+        lines_of(&work, &["linked"], false),
+        ["a.md:1:1 docs/b.md -> docs/b.md"]
+    );
+}
+
+#[test]
+fn rejects_an_alternate_data_stream_as_a_to_path() {
+    let (_tree, work) = work_tree_of(&[("b.md", "")]);
+
+    assert_eq!(
+        resolve_targets(
+            &[PathBuf::from("b.md:zone"), PathBuf::from("b.md::$DATA")],
+            &work
+        ),
+        Err(vec![
+            "b.md:zone: unsupported path".to_string(),
+            "b.md::$DATA: unsupported path".to_string()
+        ])
+    );
 }

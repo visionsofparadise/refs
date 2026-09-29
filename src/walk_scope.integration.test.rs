@@ -1,5 +1,5 @@
 use super::*;
-use crate::tree_of::{tree_of, tree_of_bytes, Tree};
+use crate::tree_of::{link_directory, tree_of, tree_of_bytes, Tree};
 use std::fs;
 use std::process::Command;
 
@@ -198,35 +198,86 @@ fn refuses_a_path_that_is_or_lies_inside_a_vcs_entry_and_walks_the_rest() {
     assert_eq!(scope.errors, [".: inside a VCS directory"]);
 }
 
-#[cfg(unix)]
-fn link_directory(target: &Path, link: &Path) -> bool {
-    std::os::unix::fs::symlink(target, link).is_ok()
-}
-
-#[cfg(windows)]
-fn link_directory(target: &Path, link: &Path) -> bool {
-    Command::new("cmd")
-        .arg("/C")
-        .arg("mklink")
-        .arg("/J")
-        .arg(link)
-        .arg(target)
-        .output()
-        .is_ok_and(|output| output.status.success())
-}
-
 #[test]
 fn refuses_a_link_that_resolves_inside_a_vcs_directory() {
     let tree = tree_of(&[(".git/objects/a.md", "")]);
 
-    assert!(link_directory(
+    if !link_directory(
         &tree.root.join(".git").join("objects"),
-        &tree.root.join("objects")
-    ));
+        &tree.root.join("objects"),
+    ) {
+        eprintln!("skipped: this user cannot create a directory link");
+
+        return;
+    }
+
     assert_eq!(
         errors_of(&tree, &["objects"]),
         ["objects: inside a VCS directory"]
     );
+}
+
+#[test]
+fn walks_a_linked_directory_as_its_canonical_target_once() {
+    let tree = tree_of(&[("docs/a.md", "")]);
+
+    if !link_directory(&tree.root.join("docs"), &tree.root.join("linked")) {
+        eprintln!("skipped: this user cannot create a directory link");
+
+        return;
+    }
+
+    assert_eq!(
+        names_of(&tree, &["linked", "docs"], ScopeOptions::default()),
+        ["docs/a.md"]
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn walks_a_trailing_dot_or_space_alias_as_its_canonical_directory() {
+    let tree = tree_of(&[("docs/a.md", "")]);
+
+    assert_eq!(
+        names_of(&tree, &["docs.", "docs ", "docs"], ScopeOptions::default()),
+        ["docs/a.md"]
+    );
+}
+
+#[test]
+fn refuses_an_alternate_data_stream() {
+    let tree = tree_of(&[("readme.md", ""), ("b.md", "")]);
+    let absolute = format!("{}:zone", tree.root.join("readme.md").display());
+
+    assert_eq!(
+        errors_of(&tree, &[&absolute, "b.md::$DATA", "readme.md:zone"]),
+        [
+            format!("{absolute}: unsupported path"),
+            "b.md::$DATA: unsupported path".to_string(),
+            "readme.md:zone: unsupported path".to_string()
+        ]
+    );
+}
+
+#[test]
+fn walks_a_root_beneath_another_root_once() {
+    let tree = tree_of(&[
+        (".ignore", "[z-a\n"),
+        ("s1/.ignore", "[y-b\n"),
+        ("s1/a.md", ""),
+    ]);
+
+    for paths in [
+        &[".", "s1"][..],
+        &["s1", "."],
+        &[".", "."],
+        &[".", "s1/a.md"],
+    ] {
+        let scope = scope_of(&tree, paths, ScopeOptions::default());
+
+        assert_eq!(scope.warnings.len(), 2, "{paths:?}: {:?}", scope.warnings);
+        assert_eq!(scope.files, [tree.root.join("s1").join("a.md")]);
+    }
 }
 
 #[test]
@@ -336,23 +387,48 @@ fn reports_an_unreadable_directory_and_walks_on() {
 
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
 
-    let enforced = fs::read_dir(&locked).is_err();
-    let scope = scope_of(&tree, &["."], ScopeOptions::default());
+    let denial = fs::read_dir(&locked).err();
+    let scope = scope_of(&tree, &[".", "locked", "."], ScopeOptions::default());
 
     fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
 
-    if !enforced {
+    let Some(denial) = denial else {
         eprintln!("skipped: permissions are not enforced for this user");
 
         return;
-    }
+    };
 
-    assert_eq!(scope.errors.len(), 1, "{:?}", scope.errors);
-    assert!(
-        scope.errors[0].starts_with("locked: "),
-        "{:?}",
-        scope.errors
-    );
+    assert_eq!(scope.errors, [format!("locked: {denial}")]);
+    assert_eq!(scope.files, [tree.root.join("kept.md")]);
+}
+
+#[cfg(windows)]
+#[test]
+fn reports_a_directory_whose_listing_is_denied_and_walks_on() {
+    let tree = tree_of(&[("locked/a.md", ""), ("kept.md", "")]);
+    let locked = tree.root.join("locked");
+
+    let icacls = |grant: &[&str]| {
+        Command::new("icacls")
+            .arg(&locked)
+            .args(grant)
+            .output()
+            .is_ok_and(|output| output.status.success())
+    };
+
+    let denied = icacls(&["/deny", "*S-1-1-0:(RD)"]);
+    let denial = fs::read_dir(&locked).err();
+    let scope = scope_of(&tree, &[".", "locked"], ScopeOptions::default());
+
+    icacls(&["/remove:d", "*S-1-1-0"]);
+
+    let (true, Some(denial)) = (denied, denial) else {
+        eprintln!("skipped: icacls could not deny the directory listing");
+
+        return;
+    };
+
+    assert_eq!(scope.errors, [format!("locked: {denial}")]);
     assert_eq!(scope.files, [tree.root.join("kept.md")]);
 }
 

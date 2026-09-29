@@ -4,8 +4,7 @@ use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
 use crate::format_path::format_path;
-use crate::path_text::is_separator;
-use crate::resolve_reference::{key_of, normalize_path, parse_absolute};
+use crate::resolve_reference::{is_beneath, key_of, locate_path, normalize_path};
 
 const VCS_NAMES: [&str; 5] = [".git", ".hg", ".svn", ".jj", ".bzr"];
 
@@ -37,25 +36,16 @@ fn is_inside_vcs(path: &Path) -> bool {
     })
 }
 
-pub fn resolve_argument(path: &Path, working_directory: &Path) -> Option<PathBuf> {
+fn resolve_argument(path: &Path, working_directory: &Path) -> Option<PathBuf> {
     let path = dunce::simplified(path);
 
-    let Some(text) = path.to_str() else {
-        return Some(normalize_path(&working_directory.join(path)));
-    };
-
-    if let Some((absolute, _)) = parse_absolute(text) {
-        return Some(absolute);
+    match path.to_str() {
+        Some(text) => locate_path(text, working_directory),
+        None => Some(normalize_path(&working_directory.join(path))),
     }
-
-    if text.starts_with(is_separator) || text.contains(':') {
-        return None;
-    }
-
-    Some(normalize_path(&working_directory.join(text)))
 }
 
-pub fn missing_message_of(path: &Path, error: &std::io::Error, working_directory: &Path) -> String {
+fn missing_message_of(path: &Path, error: &std::io::Error, working_directory: &Path) -> String {
     let path = format_path(path, working_directory);
 
     if error.kind() == ErrorKind::NotFound {
@@ -65,25 +55,48 @@ pub fn missing_message_of(path: &Path, error: &std::io::Error, working_directory
     format!("{path}: {error}")
 }
 
-fn root_of(path: &Path, working_directory: &Path) -> Result<PathBuf, String> {
-    let Some(root) = resolve_argument(path, working_directory) else {
+pub fn locate_argument(path: &Path, working_directory: &Path) -> Result<PathBuf, String> {
+    let Some(resolved) = resolve_argument(path, working_directory) else {
         return Err(format!("{}: unsupported path", path.display()));
     };
 
-    if let Err(error) = root.symlink_metadata() {
-        return Err(missing_message_of(&root, &error, working_directory));
+    if let Err(error) = resolved.symlink_metadata() {
+        return Err(missing_message_of(&resolved, &error, working_directory));
     }
 
-    let canonical = dunce::canonicalize(&root).unwrap_or_else(|_| root.clone());
+    Ok(dunce::canonicalize(&resolved).unwrap_or(resolved))
+}
 
-    if is_inside_vcs(&root) || is_inside_vcs(&canonical) {
+fn root_of(path: &Path, working_directory: &Path) -> Result<PathBuf, String> {
+    let root = locate_argument(path, working_directory)?;
+    let lexical = resolve_argument(path, working_directory).unwrap_or_else(|| root.clone());
+
+    if is_inside_vcs(&lexical) || is_inside_vcs(&root) {
         return Err(format!(
             "{}: inside a VCS directory",
-            format_path(&root, working_directory)
+            format_path(&lexical, working_directory)
         ));
     }
 
     Ok(root)
+}
+
+fn is_covered(root: &Path, index: usize, roots: &[PathBuf]) -> bool {
+    root.is_dir()
+        && roots.iter().enumerate().any(|(other_index, other)| {
+            other_index != index
+                && is_beneath(root, other)
+                && (key_of(root) != key_of(other) || other_index < index)
+        })
+}
+
+fn walk_error_of(error: &std::io::Error) -> String {
+    let source = error
+        .get_ref()
+        .and_then(|inner| inner.source())
+        .and_then(|source| source.downcast_ref::<std::io::Error>());
+
+    source.unwrap_or(error).to_string()
 }
 
 fn is_ignore_file_error(error: &ignore::Error) -> bool {
@@ -118,6 +131,7 @@ fn messages_of(error: &ignore::Error, working_directory: &Path) -> Vec<String> {
             format(child),
             format(ancestor)
         )],
+        ignore::Error::Io(error) => vec![walk_error_of(error)],
         other => vec![other.to_string().replace(['\r', '\n'], " ")],
     }
 }
@@ -132,6 +146,13 @@ pub fn walk_scope(paths: &[PathBuf], options: &ScopeOptions, working_directory: 
             Err(message) => scope.errors.push(message),
         }
     }
+
+    let roots: Vec<PathBuf> = roots
+        .iter()
+        .enumerate()
+        .filter(|(index, root)| !is_covered(root, *index, &roots))
+        .map(|(_, root)| root.clone())
+        .collect();
 
     let Some((first, rest)) = roots.split_first() else {
         return scope;
@@ -195,6 +216,12 @@ pub fn walk_scope(paths: &[PathBuf], options: &ScopeOptions, working_directory: 
     }
 
     scope.files = files.into_values().collect();
+
+    let mut seen = HashSet::new();
+
+    scope
+        .warnings
+        .retain(|warning| seen.insert(warning.clone()));
 
     scope
         .files

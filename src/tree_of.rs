@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tempfile::TempDir;
 
 pub struct Tree {
@@ -45,4 +45,21 @@ pub fn tree_of(files: &[(&str, &str)]) -> Tree {
         .collect();
 
     tree_of_bytes(&files)
+}
+
+#[cfg(unix)]
+pub fn link_directory(target: &Path, link: &Path) -> bool {
+    std::os::unix::fs::symlink(target, link).is_ok()
+}
+
+#[cfg(windows)]
+pub fn link_directory(target: &Path, link: &Path) -> bool {
+    std::process::Command::new("cmd")
+        .arg("/C")
+        .arg("mklink")
+        .arg("/J")
+        .arg(link)
+        .arg(target)
+        .output()
+        .is_ok_and(|output| output.status.success())
 }
