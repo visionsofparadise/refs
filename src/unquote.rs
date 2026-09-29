@@ -1,0 +1,117 @@
+pub fn unquote_shell(text: &str) -> Option<(String, &str)> {
+    let bytes = text.as_bytes();
+    let mut word: Vec<u8> = Vec::new();
+    let mut index = 0;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'\'' => {
+                let length = text[index + 1..].find('\'')?;
+
+                word.extend_from_slice(&bytes[index + 1..index + 1 + length]);
+
+                index += length + 2;
+            }
+            b'$' if bytes.get(index + 1) == Some(&b'\'') => {
+                index = decode_escaped(bytes, index + 2, b'\'', &mut word)?;
+            }
+            b'\\' => {
+                word.push(*bytes.get(index + 1)?);
+
+                index += 2;
+            }
+            byte if byte.is_ascii_whitespace() => break,
+            byte => {
+                word.push(byte);
+
+                index += 1;
+            }
+        }
+    }
+
+    if index == 0 {
+        return None;
+    }
+
+    Some((String::from_utf8(word).ok()?, &text[index..]))
+}
+
+pub fn unquote_git(text: &str) -> Option<String> {
+    if !text.starts_with('"') {
+        return Some(text.to_string());
+    }
+
+    let bytes = text.as_bytes();
+    let mut path: Vec<u8> = Vec::new();
+
+    if decode_escaped(bytes, 1, b'"', &mut path)? != bytes.len() {
+        return None;
+    }
+
+    String::from_utf8(path).ok()
+}
+
+fn decode_escaped(
+    bytes: &[u8],
+    start: usize,
+    terminator: u8,
+    output: &mut Vec<u8>,
+) -> Option<usize> {
+    let mut index = start;
+
+    while index < bytes.len() {
+        let byte = bytes[index];
+
+        if byte == terminator {
+            return Some(index + 1);
+        }
+
+        if byte != b'\\' {
+            output.push(byte);
+
+            index += 1;
+
+            continue;
+        }
+
+        let escaped = *bytes.get(index + 1)?;
+
+        index += 2;
+
+        match escaped {
+            b'n' => output.push(b'\n'),
+            b't' => output.push(b'\t'),
+            b'r' => output.push(b'\r'),
+            b'a' => output.push(0x07),
+            b'b' => output.push(0x08),
+            b'f' => output.push(0x0c),
+            b'v' => output.push(0x0b),
+            b'e' => output.push(0x1b),
+            b'\\' | b'\'' | b'"' | b'?' => output.push(escaped),
+            b'0'..=b'7' => {
+                let mut value = u32::from(escaped - b'0');
+                let mut digits = 1;
+
+                while digits < 3 {
+                    match bytes.get(index) {
+                        Some(digit @ b'0'..=b'7') => {
+                            value = value * 8 + u32::from(digit - b'0');
+                            index += 1;
+                            digits += 1;
+                        }
+                        _ => break,
+                    }
+                }
+
+                output.push(u8::try_from(value).ok()?);
+            }
+            _ => return None,
+        }
+    }
+
+    None
+}
+
+#[cfg(test)]
+#[path = "unquote.test.rs"]
+mod tests;

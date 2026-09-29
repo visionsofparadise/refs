@@ -1,11 +1,15 @@
 mod format_path;
 mod list_references;
 mod parse_arguments;
+#[allow(dead_code)]
+mod parse_declarations;
 mod path_text;
 #[allow(dead_code)]
 mod render_reference;
 mod resolve_reference;
 mod tokenize_references;
+#[allow(dead_code)]
+mod unquote;
 mod walk_scope;
 
 use clap::error::ErrorKind;
