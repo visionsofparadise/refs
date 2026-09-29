@@ -1,17 +1,20 @@
 use super::*;
 
-fn parts(content: &str) -> Vec<(String, String)> {
+fn parts_of(content: &str) -> Vec<(String, String)> {
     tokenize_references(content)
         .into_iter()
         .map(|token| (token.path, token.suffix))
         .collect()
 }
 
-fn paths(content: &str) -> Vec<String> {
-    parts(content).into_iter().map(|(path, _)| path).collect()
+fn paths_of(content: &str) -> Vec<String> {
+    parts_of(content)
+        .into_iter()
+        .map(|(path, _)| path)
+        .collect()
 }
 
-fn part(path: &str, suffix: &str) -> (String, String) {
+fn part_of(path: &str, suffix: &str) -> (String, String) {
     (path.to_string(), suffix.to_string())
 }
 
@@ -28,30 +31,33 @@ fn splits_a_markdown_link_target_into_path_and_fragment() {
 
 #[test]
 fn keeps_a_backticked_path() {
-    assert_eq!(paths("run `src/main.rs` first"), vec!["src/main.rs"]);
+    assert_eq!(paths_of("run `src/main.rs` first"), vec!["src/main.rs"]);
 }
 
 #[test]
 fn splits_line_and_column_suffixes() {
     assert_eq!(
-        parts("at main.rs:12 and a/b.rs:12:3"),
-        vec![part("main.rs", ":12"), part("a/b.rs", ":12:3")]
+        parts_of("at main.rs:12 and a/b.rs:12:3"),
+        vec![part_of("main.rs", ":12"), part_of("a/b.rs", ":12:3")]
     );
 }
 
 #[test]
 fn splits_a_query_suffix() {
-    assert_eq!(parts("page.html?x=1"), vec![part("page.html", "?x")]);
+    assert_eq!(parts_of("page.html?x=1"), vec![part_of("page.html", "?x")]);
 }
 
 #[test]
 fn keeps_a_drive_path_whole() {
-    assert_eq!(parts(r"open C:\x\y.md now"), vec![part(r"C:\x\y.md", "")]);
+    assert_eq!(
+        parts_of(r"open C:\x\y.md now"),
+        vec![part_of(r"C:\x\y.md", "")]
+    );
 }
 
 #[test]
 fn excludes_urls_globs_home_paths_and_git_coordinates() {
-    let content = "https://example.com/a.md mailto:x@y.com src/**/*.md ~/x.md 8fbdb84e:src/a.md file://host/x.md";
+    let content = "https://example.com/a.md mailto:x@y.com src/**/*.md ~/x.md 8fbdb84e:src/a.md";
 
     assert!(tokenize_references(content).is_empty());
 }
@@ -59,7 +65,7 @@ fn excludes_urls_globs_home_paths_and_git_coordinates() {
 #[test]
 fn trims_emphasis_mentions_and_option_prefixes() {
     assert_eq!(
-        paths("**src/a.md** **docs/a.md**: --out=dist/x.js @src/b.md"),
+        paths_of("**src/a.md** **docs/a.md**: --out=dist/x.js @src/b.md"),
         vec!["src/a.md", "docs/a.md", "dist/x.js", "src/b.md"]
     );
 }
@@ -67,7 +73,7 @@ fn trims_emphasis_mentions_and_option_prefixes() {
 #[test]
 fn keeps_underscores_and_inner_at_signs() {
     assert_eq!(
-        paths("__init__.py _config.yml assets/icon@2x.png node_modules/@types/node/index.d.ts"),
+        paths_of("__init__.py _config.yml assets/icon@2x.png node_modules/@types/node/index.d.ts"),
         vec![
             "__init__.py",
             "_config.yml",
@@ -79,7 +85,7 @@ fn keeps_underscores_and_inner_at_signs() {
 
 #[test]
 fn keeps_a_local_file_url() {
-    assert_eq!(paths("file:///C:/x.md"), vec!["file:///C:/x.md"]);
+    assert_eq!(paths_of("file:///C:/x.md"), vec!["file:///C:/x.md"]);
 }
 
 #[test]
@@ -90,7 +96,7 @@ fn ignores_bare_names_and_dotfiles() {
 #[test]
 fn trims_trailing_punctuation() {
     assert_eq!(
-        paths("see docs/a.md. then src/b.md, done"),
+        paths_of("see docs/a.md. then src/b.md, done"),
         vec!["docs/a.md", "src/b.md"]
     );
 }
@@ -134,4 +140,25 @@ fn reads_crlf_lines() {
     assert_eq!(tokens[1].path, "b/c.md");
     assert_eq!((tokens[1].line, tokens[1].column), (2, 1));
     assert_eq!(tokens[1].start, 8);
+}
+
+#[test]
+fn excludes_a_file_url_with_a_host() {
+    assert!(tokenize_references("file://host/x.md FILE://server/share/a.md").is_empty());
+}
+
+#[test]
+fn keeps_trailing_dots_after_a_dot_or_separator() {
+    assert_eq!(
+        paths_of(r"up ../.. here src/. and C:\x\.. end"),
+        vec!["../..", "src/.", r"C:\x\.."]
+    );
+}
+
+#[test]
+fn keeps_underscore_pairs() {
+    assert_eq!(
+        paths_of("__fixtures__/x/__mocks__"),
+        vec!["__fixtures__/x/__mocks__"]
+    );
 }

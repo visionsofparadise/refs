@@ -1,7 +1,7 @@
 use super::*;
 use std::path::PathBuf;
 
-fn absolute(names: &[&str]) -> PathBuf {
+fn absolute_path_of(names: &[&str]) -> PathBuf {
     let mut path = if cfg!(windows) {
         PathBuf::from("C:\\")
     } else {
@@ -15,7 +15,7 @@ fn absolute(names: &[&str]) -> PathBuf {
     path
 }
 
-fn plain() -> PathStyle {
+fn create_plain_style() -> PathStyle {
     PathStyle {
         separator: '/',
         doubled_backslashes: false,
@@ -23,17 +23,30 @@ fn plain() -> PathStyle {
         trailing_separator: false,
         percent_encoded: false,
         file_scheme: false,
+        scheme: String::new(),
+        lowercase_drive: false,
+        encoded_drive_colon: false,
     }
 }
 
-fn render(target: &[&str], form: PathForm, style: PathStyle) -> Option<String> {
+fn render_with_suffix(
+    target: &[&str],
+    form: PathForm,
+    style: PathStyle,
+    suffix: &str,
+) -> Option<String> {
     render_reference(
-        &absolute(target),
+        &absolute_path_of(target),
         &form,
         &style,
-        &absolute(&["work", "notes"]),
-        &absolute(&["work"]),
+        suffix,
+        &absolute_path_of(&["work", "notes"]),
+        &absolute_path_of(&["work"]),
     )
+}
+
+fn render(target: &[&str], form: PathForm, style: PathStyle) -> Option<String> {
+    render_with_suffix(target, form, style, "")
 }
 
 fn render_file_relative(target: &[&str], style: PathStyle) -> Option<String> {
@@ -43,7 +56,7 @@ fn render_file_relative(target: &[&str], style: PathStyle) -> Option<String> {
 #[test]
 fn renders_a_file_relative_path_across_a_depth_change() {
     assert_eq!(
-        render_file_relative(&["work", "docs", "deep", "a.md"], plain()).as_deref(),
+        render_file_relative(&["work", "docs", "deep", "a.md"], create_plain_style()).as_deref(),
         Some("../docs/deep/a.md")
     );
 }
@@ -54,7 +67,7 @@ fn renders_a_working_directory_relative_path_across_a_depth_change() {
         render(
             &["work", "docs", "deep", "a.md"],
             PathForm::WorkingDirectoryRelative,
-            plain()
+            create_plain_style()
         )
         .as_deref(),
         Some("docs/deep/a.md")
@@ -62,10 +75,25 @@ fn renders_a_working_directory_relative_path_across_a_depth_change() {
 }
 
 #[test]
-fn renders_the_base_itself_as_a_dot() {
+fn renders_with_a_suffix_that_round_trips() {
     assert_eq!(
-        render_file_relative(&["work", "notes"], plain()).as_deref(),
-        Some(".")
+        render_with_suffix(
+            &["work", "docs", "a.md"],
+            PathForm::FileRelative,
+            create_plain_style(),
+            "#h"
+        )
+        .as_deref(),
+        Some("../docs/a.md")
+    );
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn compares_relative_components_through_the_key() {
+    assert_eq!(
+        render_file_relative(&["WORK", "NOTES", "a.md"], create_plain_style()).as_deref(),
+        Some("a.md")
     );
 }
 
@@ -73,7 +101,7 @@ fn renders_the_base_itself_as_a_dot() {
 fn renders_with_the_recorded_separator() {
     let style = PathStyle {
         separator: '\\',
-        ..plain()
+        ..create_plain_style()
     };
 
     assert_eq!(
@@ -87,7 +115,7 @@ fn renders_doubled_backslashes() {
     let style = PathStyle {
         separator: '\\',
         doubled_backslashes: true,
-        ..plain()
+        ..create_plain_style()
     };
 
     assert_eq!(
@@ -100,11 +128,11 @@ fn renders_doubled_backslashes() {
 fn renders_a_dot_prefix_except_before_a_parent_segment() {
     let style = PathStyle {
         dot_prefix: true,
-        ..plain()
+        ..create_plain_style()
     };
 
     assert_eq!(
-        render_file_relative(&["work", "notes", "sub", "a.md"], style).as_deref(),
+        render_file_relative(&["work", "notes", "sub", "a.md"], style.clone()).as_deref(),
         Some("./sub/a.md")
     );
     assert_eq!(
@@ -117,7 +145,7 @@ fn renders_a_dot_prefix_except_before_a_parent_segment() {
 fn renders_a_trailing_separator() {
     let style = PathStyle {
         trailing_separator: true,
-        ..plain()
+        ..create_plain_style()
     };
 
     assert_eq!(
@@ -130,7 +158,7 @@ fn renders_a_trailing_separator() {
 fn renders_percent_encoding() {
     let style = PathStyle {
         percent_encoded: true,
-        ..plain()
+        ..create_plain_style()
     };
 
     assert_eq!(
@@ -143,7 +171,7 @@ fn renders_percent_encoding() {
 fn renders_non_ascii_percent_encoding() {
     let style = PathStyle {
         percent_encoded: true,
-        ..plain()
+        ..create_plain_style()
     };
 
     assert_eq!(
@@ -153,37 +181,111 @@ fn renders_non_ascii_percent_encoding() {
 }
 
 #[test]
-fn reports_an_unencoded_rendering_containing_a_delimiter_as_unrewritable() {
+fn reports_a_rendering_that_splits_into_other_tokens_as_unrewritable() {
     assert_eq!(
-        render_file_relative(&["work", "my docs", "a.md"], plain()),
+        render_file_relative(&["work", "my docs", "a.md"], create_plain_style()),
         None
     );
     assert_eq!(
-        render_file_relative(&["work", "docs", "a(1).md"], plain()),
+        render_file_relative(&["work", "docs", "a(1).md"], create_plain_style()),
         None
     );
 }
 
+#[test]
+fn reports_a_rendering_that_tokenizes_differently_as_unrewritable() {
+    let cases: [&[&str]; 6] = [
+        &["work", "notes", "@types", "x.d.ts"],
+        &["work", "notes", "x%20y.md"],
+        &["work", "notes", "sub", "notes:12"],
+        &["work", "notes", "~old", "a.md"],
+        &["work", "notes", "cafe:x", "a.md"],
+        &["work", "notes", "a.md."],
+    ];
+
+    for target in cases {
+        assert_eq!(
+            render_file_relative(target, create_plain_style()),
+            None,
+            "{target:?}"
+        );
+    }
+}
+
+#[test]
+fn reports_a_bare_dot_or_parent_as_unrewritable() {
+    assert_eq!(
+        render_file_relative(&["work", "notes"], create_plain_style()),
+        None
+    );
+    assert_eq!(render_file_relative(&["work"], create_plain_style()), None);
+}
+
 #[cfg(windows)]
 #[test]
-fn renders_drive_and_msys_absolute_paths() {
+fn renders_drive_and_msys_absolute_paths_in_their_written_case() {
     let target = &["x", "deep", "a.md"];
+
+    let backslashed = PathStyle {
+        separator: '\\',
+        ..create_plain_style()
+    };
+
+    let lowercase = PathStyle {
+        lowercase_drive: true,
+        ..create_plain_style()
+    };
 
     assert_eq!(
         render(
             target,
             PathForm::Absolute(AbsoluteStyle::Drive),
-            PathStyle {
-                separator: '\\',
-                ..plain()
-            }
+            backslashed
         )
         .as_deref(),
         Some("C:\\x\\deep\\a.md")
     );
     assert_eq!(
-        render(target, PathForm::Absolute(AbsoluteStyle::Msys), plain()).as_deref(),
+        render(
+            target,
+            PathForm::Absolute(AbsoluteStyle::Drive),
+            lowercase.clone()
+        )
+        .as_deref(),
+        Some("c:/x/deep/a.md")
+    );
+    assert_eq!(
+        render(target, PathForm::Absolute(AbsoluteStyle::Msys), lowercase).as_deref(),
         Some("/c/x/deep/a.md")
+    );
+    assert_eq!(
+        render(
+            target,
+            PathForm::Absolute(AbsoluteStyle::Msys),
+            create_plain_style()
+        )
+        .as_deref(),
+        Some("/C/x/deep/a.md")
+    );
+}
+
+#[cfg(windows)]
+#[test]
+fn renders_a_drive_file_url() {
+    let style = PathStyle {
+        file_scheme: true,
+        scheme: "FILE".to_string(),
+        ..create_plain_style()
+    };
+
+    assert_eq!(
+        render(
+            &["x", "a.md"],
+            PathForm::Absolute(AbsoluteStyle::Drive),
+            style
+        )
+        .as_deref(),
+        Some("FILE:///C:/x/a.md")
     );
 }
 
@@ -193,7 +295,8 @@ fn renders_a_percent_encoded_drive_file_url_keeping_the_drive_colon() {
     let style = PathStyle {
         percent_encoded: true,
         file_scheme: true,
-        ..plain()
+        scheme: "file".to_string(),
+        ..create_plain_style()
     };
 
     assert_eq!(
@@ -209,12 +312,36 @@ fn renders_a_percent_encoded_drive_file_url_keeping_the_drive_colon() {
 
 #[cfg(windows)]
 #[test]
+fn renders_an_encoded_drive_colon_as_written() {
+    let style = PathStyle {
+        percent_encoded: true,
+        file_scheme: true,
+        scheme: "file".to_string(),
+        lowercase_drive: true,
+        encoded_drive_colon: true,
+        ..create_plain_style()
+    };
+
+    assert_eq!(
+        render(
+            &["Users", "a.md"],
+            PathForm::Absolute(AbsoluteStyle::Drive),
+            style
+        )
+        .as_deref(),
+        Some("file:///c%3A/Users/a.md")
+    );
+}
+
+#[cfg(windows)]
+#[test]
 fn reports_a_relative_rendering_across_drives_as_unrewritable() {
     assert_eq!(
         render_reference(
             Path::new("D:\\a.md"),
             &PathForm::FileRelative,
-            &plain(),
+            &create_plain_style(),
+            "",
             Path::new("C:\\work"),
             Path::new("C:\\work"),
         ),
@@ -229,7 +356,7 @@ fn renders_a_posix_absolute_path() {
         render(
             &["x", "deep", "a.md"],
             PathForm::Absolute(AbsoluteStyle::Posix),
-            plain()
+            create_plain_style()
         )
         .as_deref(),
         Some("/x/deep/a.md")
@@ -241,7 +368,8 @@ fn renders_a_posix_absolute_path() {
 fn renders_a_posix_file_url() {
     let style = PathStyle {
         file_scheme: true,
-        ..plain()
+        scheme: "file".to_string(),
+        ..create_plain_style()
     };
 
     assert_eq!(

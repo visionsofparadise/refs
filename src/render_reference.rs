@@ -1,8 +1,8 @@
 use percent_encoding::{utf8_percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use std::path::{Component, Path};
 
-use crate::resolve_reference::{key_of, AbsoluteStyle, PathForm, PathStyle};
-use crate::tokenize_references::is_delimiter;
+use crate::resolve_reference::{key_of, resolve_reference, AbsoluteStyle, PathForm, PathStyle};
+use crate::tokenize_references::tokenize_references;
 
 const ENCODED: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'-')
@@ -10,27 +10,36 @@ const ENCODED: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-fn is_unrewritable(character: char) -> bool {
-    is_delimiter(character) || matches!(character, '#' | '?' | '*')
-}
-
 fn name_of(component: Component) -> Option<String> {
     match component {
         Component::Normal(name) => name.to_str().map(str::to_string),
-        Component::ParentDir => Some("..".to_string()),
         _ => None,
     }
 }
 
-fn relative_names(target: &Path, base: &Path) -> Option<Vec<String>> {
-    if key_of(target).first() != key_of(base).first() {
+fn diff_names(target: &Path, base: &Path) -> Option<Vec<String>> {
+    let target_key = key_of(target);
+    let base_key = key_of(base);
+
+    let common = target_key
+        .iter()
+        .zip(&base_key)
+        .take_while(|(target_name, base_name)| target_name == base_name)
+        .count();
+
+    if common == 0 {
         return None;
     }
 
-    let names = pathdiff::diff_paths(target, base)?
+    let parents = std::iter::repeat_n("..".to_string(), base_key.len() - common);
+
+    let names = target
         .components()
+        .skip(common)
         .map(name_of)
         .collect::<Option<Vec<String>>>()?;
+
+    let names: Vec<String> = parents.chain(names).collect();
 
     if names.is_empty() {
         return Some(vec![".".to_string()]);
@@ -39,8 +48,8 @@ fn relative_names(target: &Path, base: &Path) -> Option<Vec<String>> {
     Some(names)
 }
 
-fn relative_parts(target: &Path, base: &Path, style: &PathStyle) -> Option<(String, Vec<String>)> {
-    let names = relative_names(target, base)?;
+fn split_relative(target: &Path, base: &Path, style: &PathStyle) -> Option<(String, Vec<String>)> {
+    let names = diff_names(target, base)?;
     let bare = names[0] == ".." || names[0] == ".";
 
     let head = if style.dot_prefix && !bare {
@@ -52,7 +61,7 @@ fn relative_parts(target: &Path, base: &Path, style: &PathStyle) -> Option<(Stri
     Some((head, names))
 }
 
-fn absolute_names<'a>(components: impl Iterator<Item = Component<'a>>) -> Option<Vec<String>> {
+fn collect_names<'a>(components: impl Iterator<Item = Component<'a>>) -> Option<Vec<String>> {
     components
         .filter(|component| !matches!(component, Component::RootDir))
         .map(name_of)
@@ -60,10 +69,10 @@ fn absolute_names<'a>(components: impl Iterator<Item = Component<'a>>) -> Option
 }
 
 #[cfg(windows)]
-fn absolute_parts(
+fn split_absolute(
     target: &Path,
     absolute: AbsoluteStyle,
-    separator: char,
+    style: &PathStyle,
 ) -> Option<(String, Vec<String>)> {
     use std::path::Prefix;
 
@@ -71,42 +80,101 @@ fn absolute_parts(
 
     let letter = match components.next()? {
         Component::Prefix(prefix) => match prefix.kind() {
-            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => char::from(letter),
+            Prefix::Disk(letter) | Prefix::VerbatimDisk(letter) => letter,
             _ => return None,
         },
         _ => return None,
     };
 
+    let letter = char::from(if style.lowercase_drive {
+        letter.to_ascii_lowercase()
+    } else {
+        letter.to_ascii_uppercase()
+    });
+
+    let separator = style.separator;
+
     let head = match absolute {
+        AbsoluteStyle::Drive if style.percent_encoded && style.encoded_drive_colon => {
+            format!("{letter}%3A{separator}")
+        }
         AbsoluteStyle::Drive => format!("{letter}:{separator}"),
-        AbsoluteStyle::Msys => format!("/{}{separator}", letter.to_ascii_lowercase()),
+        AbsoluteStyle::Msys => format!("/{letter}{separator}"),
     };
 
-    Some((head, absolute_names(components)?))
+    Some((head, collect_names(components)?))
 }
 
 #[cfg(not(windows))]
-fn absolute_parts(
+fn split_absolute(
     target: &Path,
     absolute: AbsoluteStyle,
-    separator: char,
+    style: &PathStyle,
 ) -> Option<(String, Vec<String>)> {
     match absolute {
-        AbsoluteStyle::Posix => Some((separator.to_string(), absolute_names(target.components())?)),
+        AbsoluteStyle::Posix => Some((
+            style.separator.to_string(),
+            collect_names(target.components())?,
+        )),
     }
+}
+
+fn is_relative(form: &PathForm) -> bool {
+    matches!(
+        form,
+        PathForm::FileRelative | PathForm::WorkingDirectoryRelative
+    )
+}
+
+fn round_trips(
+    rendered: &str,
+    suffix: &str,
+    target: &Path,
+    form: &PathForm,
+    referrer_directory: &Path,
+    working_directory: &Path,
+) -> bool {
+    let text = format!("{rendered}{suffix}");
+    let tokens = tokenize_references(&text);
+
+    let [token] = tokens.as_slice() else {
+        return false;
+    };
+
+    if token.start != 0
+        || token.end != text.len()
+        || token.path != rendered
+        || token.suffix != suffix
+    {
+        return false;
+    }
+
+    let target_key = key_of(target);
+    let shared_base = key_of(referrer_directory) == key_of(working_directory);
+
+    resolve_reference(rendered, referrer_directory, working_directory)
+        .0
+        .iter()
+        .any(|candidate| {
+            let same_form = candidate.form == *form
+                || (shared_base && is_relative(form) && is_relative(&candidate.form));
+
+            same_form && key_of(&candidate.target) == target_key
+        })
 }
 
 pub fn render_reference(
     target: &Path,
     form: &PathForm,
     style: &PathStyle,
+    suffix: &str,
     referrer_directory: &Path,
     working_directory: &Path,
 ) -> Option<String> {
     let (head, names) = match form {
-        PathForm::FileRelative => relative_parts(target, referrer_directory, style)?,
-        PathForm::WorkingDirectoryRelative => relative_parts(target, working_directory, style)?,
-        PathForm::Absolute(absolute) => absolute_parts(target, *absolute, style.separator)?,
+        PathForm::FileRelative => split_relative(target, referrer_directory, style)?,
+        PathForm::WorkingDirectoryRelative => split_relative(target, working_directory, style)?,
+        PathForm::Absolute(absolute) => split_absolute(target, *absolute, style)?,
     };
 
     let names: Vec<String> = if style.percent_encoded {
@@ -124,22 +192,34 @@ pub fn render_reference(
         rendered.push(style.separator);
     }
 
-    if !style.percent_encoded && rendered.contains(is_unrewritable) {
-        return None;
-    }
-
     if style.doubled_backslashes {
         rendered = rendered.replace('\\', "\\\\");
     }
 
     if style.file_scheme {
+        let scheme = if style.scheme.is_empty() {
+            "file"
+        } else {
+            &style.scheme
+        };
         let slashes = if rendered.starts_with('/') {
             "//"
         } else {
             "///"
         };
 
-        rendered = format!("file:{slashes}{rendered}");
+        rendered = format!("{scheme}:{slashes}{rendered}");
+    }
+
+    if !round_trips(
+        &rendered,
+        suffix,
+        target,
+        form,
+        referrer_directory,
+        working_directory,
+    ) {
+        return None;
     }
 
     Some(rendered)

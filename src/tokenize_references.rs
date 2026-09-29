@@ -1,4 +1,4 @@
-use crate::resolve_reference::{has_interior_dot, is_separator};
+use crate::path_text::{has_interior_dot, is_delimiter, is_separator};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Token {
@@ -12,27 +12,15 @@ pub struct Token {
 
 const BYTE_ORDER_MARK: char = '\u{feff}';
 
-const EMPHASIS_MARKERS: [&str; 3] = ["**", "__", "*"];
+const EMPHASIS_MARKERS: [&str; 2] = ["**", "*"];
 
-pub fn is_delimiter(character: char) -> bool {
-    character.is_whitespace()
-        || matches!(
-            character,
-            '"' | '\''
-                | '`'
-                | '('
-                | ')'
-                | '['
-                | ']'
-                | '<'
-                | '>'
-                | '{'
-                | '}'
-                | ','
-                | ';'
-                | '|'
-                | '='
-        )
+fn ends_with_trimmable_dot(text: &str) -> bool {
+    match text.strip_suffix('.') {
+        Some(rest) => {
+            !rest.ends_with(|character: char| character == '.' || is_separator(character))
+        }
+        None => false,
+    }
 }
 
 fn trim(content: &str, mut start: usize, mut end: usize) -> (usize, usize) {
@@ -48,7 +36,7 @@ fn trim(content: &str, mut start: usize, mut end: usize) -> (usize, usize) {
             end -= marker.len();
         } else if text.starts_with('@') {
             start += 1;
-        } else if text.ends_with(['.', ':', ',']) {
+        } else if text.ends_with([':', ',']) || ends_with_trimmable_dot(text) {
             end -= 1;
         } else {
             return (start, end);
