@@ -163,6 +163,22 @@ pub fn parse_absolute(path: &str) -> Option<(PathBuf, AbsoluteStyle)> {
     Some((join_relative(Path::new("/"), path), AbsoluteStyle::Posix))
 }
 
+pub fn locate_path(path: &str, base_directory: &Path) -> Option<PathBuf> {
+    if has_foreign_colon(path) {
+        return None;
+    }
+
+    if let Some((target, _)) = parse_absolute(path) {
+        return Some(target);
+    }
+
+    if path.starts_with(is_separator) || path.contains(':') {
+        return None;
+    }
+
+    Some(join_relative(base_directory, path))
+}
+
 pub fn is_dangling_shaped(path: &str) -> bool {
     match path.rfind(is_separator) {
         Some(index) => has_interior_dot(&path[index + 1..]),

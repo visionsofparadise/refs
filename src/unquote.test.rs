@@ -22,6 +22,27 @@ fn joins_an_escaped_quote_between_quoted_segments() {
 }
 
 #[test]
+fn reads_the_double_quoted_form_gnu_uses_for_a_name_with_a_quote() {
+    assert_eq!(
+        unquote_shell("\"it's.md\" -> x"),
+        Some(("it's.md".to_string(), " -> x"))
+    );
+    assert_eq!(
+        unquote_shell("\"a\\\"b\\\\c\\$d\\q\""),
+        Some(("a\"b\\c$d\\q".to_string(), ""))
+    );
+    assert_eq!(unquote_shell("\"abc"), None);
+}
+
+#[test]
+fn keeps_a_bare_backslash_as_written() {
+    assert_eq!(
+        unquote_shell("src\\a.md -> x"),
+        Some(("src\\a.md".to_string(), " -> x"))
+    );
+}
+
+#[test]
 fn joins_adjacent_quoted_and_bare_segments() {
     assert_eq!(unquote_shell("'a'b'c d'"), Some(("abc d".to_string(), "")));
 }

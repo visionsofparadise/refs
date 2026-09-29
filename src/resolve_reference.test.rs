@@ -367,3 +367,42 @@ fn never_reads_a_joined_segment_as_a_prefix() {
     ));
     assert!(!normalized.is_absolute());
 }
+
+#[test]
+fn locates_a_declared_path_against_a_base_or_its_absolute_form() {
+    let base = absolute_path_of(&["work"]);
+
+    assert_eq!(
+        locate_path("a/../b\\c.md", &base),
+        Some(absolute_path_of(&["work", "b", "c.md"]))
+    );
+
+    #[cfg(windows)]
+    assert_eq!(
+        locate_path("/c/x/a.md", &base),
+        Some(PathBuf::from("C:\\x\\a.md"))
+    );
+
+    #[cfg(not(windows))]
+    assert_eq!(
+        locate_path("/x/a.md", &base),
+        Some(PathBuf::from("/x/a.md"))
+    );
+}
+
+#[test]
+fn locates_no_path_the_grammar_gives_no_candidate() {
+    let base = absolute_path_of(&["work"]);
+
+    for path in ["C:rel.md", "a:b.md"] {
+        assert_eq!(locate_path(path, &base), None, "{path}");
+    }
+
+    #[cfg(windows)]
+    for path in ["/tmp/x.md", "\\docs\\a.md", "/c", "\\\\server\\share\\a.md"] {
+        assert_eq!(locate_path(path, &base), None, "{path}");
+    }
+
+    #[cfg(not(windows))]
+    assert_eq!(locate_path("C:\\x\\a.md", &base), None);
+}

@@ -15,8 +15,11 @@ pub fn unquote_shell(text: &str) -> Option<(String, &str)> {
             b'$' if bytes.get(index + 1) == Some(&b'\'') => {
                 index = decode_escaped(bytes, index + 2, b'\'', &mut word)?;
             }
-            b'\\' => {
-                word.push(*bytes.get(index + 1)?);
+            b'"' => {
+                index = decode_double_quoted(bytes, index + 1, &mut word)?;
+            }
+            b'\\' if bytes.get(index + 1) == Some(&b'\'') => {
+                word.push(b'\'');
 
                 index += 2;
             }
@@ -49,6 +52,28 @@ pub fn unquote_git(text: &str) -> Option<String> {
     }
 
     String::from_utf8(path).ok()
+}
+
+fn decode_double_quoted(bytes: &[u8], start: usize, output: &mut Vec<u8>) -> Option<usize> {
+    let mut index = start;
+
+    while index < bytes.len() {
+        match bytes[index] {
+            b'"' => return Some(index + 1),
+            b'\\' if matches!(bytes.get(index + 1), Some(b'"' | b'\\' | b'$' | b'`')) => {
+                output.push(bytes[index + 1]);
+
+                index += 2;
+            }
+            byte => {
+                output.push(byte);
+
+                index += 1;
+            }
+        }
+    }
+
+    None
 }
 
 fn decode_escaped(
