@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "rust-starter"
+name = "refs"
 version = "0.1.0"
