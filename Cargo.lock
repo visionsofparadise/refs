@@ -302,7 +302,9 @@ dependencies = [
  "dunce",
  "ignore",
  "percent-encoding",
+ "same-file",
  "tempfile",
+ "windows-sys",
 ]
 
 [[package]]

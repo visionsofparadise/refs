@@ -1,12 +1,11 @@
-use std::io;
 use std::path::{Path, PathBuf};
 
 use crate::format_path::format_path;
 use crate::list_references::ExistenceCache;
 use crate::map_in_parallel::map_in_parallel;
-use crate::parse_declarations::{Declaration, Rejected};
+use crate::parse_declarations::{Declaration, Origin, Rejected};
 use crate::render_reference::render_reference;
-use crate::resolve_reference::{is_beneath, key_of, normalize_path, resolve_reference};
+use crate::resolve_reference::{is_beneath, key_of, normalize_path, resolve_reference, PathForm};
 use crate::tokenize_references::{tokenize_references, Token};
 use crate::walk_scope::{read_text, Scope};
 
@@ -37,6 +36,7 @@ pub struct FixPlan {
     pub unscanned: Vec<PathBuf>,
     pub rejected: Vec<Rejected>,
     pub edits: Vec<FileEdit>,
+    pub errors: Vec<String>,
 }
 
 const SOURCE_STILL_EXISTS: &str = "source still exists";
@@ -77,6 +77,21 @@ fn rebase(path: &Path, base: &Path, onto: &Path) -> PathBuf {
         .fold(onto.to_path_buf(), |joined, part| joined.join(part))
 }
 
+fn recase(path: &Path, from: &Path, to: &Path) -> PathBuf {
+    let renamed = from.components().zip(to.components());
+
+    path.components()
+        .zip(renamed.map(Some).chain(std::iter::repeat(None)))
+        .fold(PathBuf::new(), |mut joined, (part, names)| {
+            match names {
+                Some((before, after)) if before != after => joined.push(after),
+                _ => joined.push(part),
+            }
+
+            joined
+        })
+}
+
 fn canonical_of(path: &Path, cache: &ExistenceCache) -> PathBuf {
     for ancestor in path.ancestors().skip(1) {
         if !cache.exists(ancestor) {
@@ -105,10 +120,25 @@ fn canonicalize_declaration(declaration: Declaration, cache: &ExistenceCache) ->
     }
 }
 
-fn earlier_source_of(composed: &[Declaration], path: &Path) -> Option<(usize, PathBuf, bool)> {
+fn origin_of(declaration: &Declaration) -> &Origin {
+    match declaration {
+        Declaration::Move { origin, .. } | Declaration::Delete { origin, .. } => origin,
+    }
+}
+
+fn is_composable(declaration: &Declaration, snapshot: Option<usize>) -> bool {
+    snapshot.is_none() || origin_of(declaration).snapshot != snapshot
+}
+
+fn earlier_source_of(
+    composed: &[Declaration],
+    path: &Path,
+    snapshot: Option<usize>,
+) -> Option<(usize, PathBuf, bool)> {
     composed
         .iter()
         .enumerate()
+        .filter(|(_, declaration)| is_composable(declaration, snapshot))
         .filter_map(|(index, declaration)| match declaration {
             Declaration::Move { from, to, .. } if is_beneath(path, to) => Some((index, from, to)),
             _ => None,
@@ -117,37 +147,98 @@ fn earlier_source_of(composed: &[Declaration], path: &Path) -> Option<(usize, Pa
         .map(|(index, from, to)| (index, rebase(path, to, from), key_of(path) == key_of(to)))
 }
 
+fn compose_move(composed: &mut Vec<Declaration>, from: PathBuf, to: PathBuf, origin: Origin) {
+    let snapshot = origin.snapshot;
+    let chained = earlier_source_of(composed, &from, snapshot);
+
+    for (index, declaration) in composed.iter_mut().enumerate() {
+        if !is_composable(declaration, snapshot)
+            || chained.as_ref().is_some_and(|(chain, ..)| *chain == index)
+        {
+            continue;
+        }
+
+        let Declaration::Move {
+            from: earlier_from,
+            to: earlier_to,
+            origin: earlier_origin,
+        } = declaration
+        else {
+            continue;
+        };
+
+        if key_of(earlier_to) == key_of(&to) {
+            *declaration = Declaration::Delete {
+                path: earlier_from.clone(),
+                origin: origin.clone(),
+            };
+        } else if is_beneath(earlier_to, &from) && key_of(earlier_to) != key_of(&from) {
+            *earlier_to = rebase(earlier_to, &from, &to);
+            earlier_origin.snapshot = snapshot;
+        }
+    }
+
+    let (from, index) = match chained {
+        Some((index, source, true)) => (source, Some(index)),
+        Some((_, source, false)) => (source, None),
+        None => (from, None),
+    };
+
+    let round_trip = from == to;
+    let declaration = Declaration::Move { from, to, origin };
+
+    match (index, round_trip) {
+        (Some(index), true) => {
+            composed.remove(index);
+        }
+        (Some(index), false) => composed[index] = declaration,
+        (None, true) => {}
+        (None, false) => composed.push(declaration),
+    }
+}
+
+fn compose_delete(composed: &mut Vec<Declaration>, path: PathBuf, origin: Origin) {
+    let snapshot = origin.snapshot;
+    let chained = earlier_source_of(composed, &path, snapshot);
+    let mut covered = false;
+
+    for declaration in composed.iter_mut() {
+        if !is_composable(declaration, snapshot) {
+            continue;
+        }
+
+        if let Declaration::Move { from, to, .. } = declaration {
+            if is_beneath(to, &path) {
+                covered |= key_of(to) == key_of(&path);
+
+                *declaration = Declaration::Delete {
+                    path: from.clone(),
+                    origin: origin.clone(),
+                };
+            }
+        }
+    }
+
+    if covered {
+        return;
+    }
+
+    let path = chained.map_or(path, |(_, source, _)| source);
+
+    composed.push(Declaration::Delete { path, origin });
+}
+
 fn compose(declarations: Vec<Declaration>) -> Vec<Declaration> {
     let mut composed: Vec<Declaration> = Vec::new();
 
     for declaration in declarations {
-        let path = match &declaration {
-            Declaration::Move { from, .. } => from,
-            Declaration::Delete { path, .. } => path,
-        };
-
-        let Some((index, source, replaces)) = earlier_source_of(&composed, path) else {
-            composed.push(declaration);
-
-            continue;
-        };
-
-        let declaration = match declaration {
-            Declaration::Move { to, origin, .. } => Declaration::Move {
-                from: source,
-                to,
-                origin,
-            },
-            Declaration::Delete { origin, .. } => Declaration::Delete {
-                path: source,
-                origin,
-            },
-        };
-
-        if replaces {
-            composed[index] = declaration;
-        } else {
-            composed.push(declaration);
+        match declaration {
+            Declaration::Move { from, to, origin } => {
+                compose_move(&mut composed, from, to, origin);
+            }
+            Declaration::Delete { path, origin } => {
+                compose_delete(&mut composed, path, origin);
+            }
         }
     }
 
@@ -161,12 +252,29 @@ fn validate(declarations: Vec<Declaration>, cache: &ExistenceCache) -> (Moves, V
     };
     let mut rejected = Vec::new();
 
-    for declaration in declarations {
+    let refilled = |from: &Path, snapshot: Option<usize>| {
+        snapshot.is_some()
+            && declarations.iter().any(|declaration| match declaration {
+                Declaration::Move { to, origin, .. } => {
+                    origin.snapshot == snapshot && is_beneath(from, to)
+                }
+                Declaration::Delete { .. } => false,
+            })
+    };
+    let refilled: Vec<bool> = declarations
+        .iter()
+        .map(|declaration| match declaration {
+            Declaration::Move { from, origin, .. } => refilled(from, origin.snapshot),
+            Declaration::Delete { .. } => false,
+        })
+        .collect();
+
+    for (declaration, refilled) in declarations.into_iter().zip(refilled) {
         match declaration {
             Declaration::Move { from, to, origin } => {
                 let reason = if key_of(&from) == key_of(&to) {
                     None
-                } else if cache.exists(&from) {
+                } else if cache.exists(&from) && !refilled {
                     Some(SOURCE_STILL_EXISTS)
                 } else if !cache.exists(&to) {
                     Some(DESTINATION_MISSING)
@@ -209,9 +317,13 @@ impl Moves {
             .max_by_key(|found| key_of(&found.from).len());
 
         match found {
+            Some(found) if key_of(&found.from) == key_of(&found.to) => Mapped {
+                path: recase(path, &found.from, &found.to),
+                case_only: true,
+            },
             Some(found) => Mapped {
                 path: rebase(path, &found.from, &found.to),
-                case_only: key_of(&found.from) == key_of(&found.to),
+                case_only: false,
             },
             None => Mapped {
                 path: path.to_path_buf(),
@@ -236,12 +348,29 @@ impl Moves {
     }
 }
 
-fn resolves_to(token: &Token, directory: &Path, mapped: &Mapped, context: &Context) -> bool {
+fn is_relative(form: &PathForm) -> bool {
+    matches!(
+        form,
+        PathForm::FileRelative | PathForm::WorkingDirectoryRelative
+    )
+}
+
+fn resolves_to(
+    token: &Token,
+    form: &PathForm,
+    directory: &Path,
+    mapped: &Mapped,
+    context: &Context,
+) -> bool {
     let (candidates, _) = resolve_reference(&token.path, directory, context.working_directory);
+    let shared_base = key_of(directory) == key_of(context.working_directory);
 
     candidates
         .iter()
-        .find(|candidate| context.cache.exists(&candidate.target))
+        .find(|candidate| {
+            candidate.form == *form
+                || (shared_base && is_relative(form) && is_relative(&candidate.form))
+        })
         .is_some_and(|found| {
             if mapped.case_only {
                 found.target == mapped.path
@@ -278,7 +407,7 @@ fn decide(
             continue;
         }
 
-        if resolves_to(token, directory, &mapped, context) {
+        if resolves_to(token, &candidate.form, directory, &mapped, context) {
             return None;
         }
 
@@ -358,13 +487,9 @@ struct FileFix {
     edit: Option<FileEdit>,
 }
 
-fn fix_file(file: &Path, context: &Context) -> io::Result<FileFix> {
-    let content = read_text(file).map_err(|error| {
-        io::Error::new(
-            error.kind(),
-            format!("{}: {error}", format_path(file, context.working_directory)),
-        )
-    })?;
+fn fix_file(file: &Path, context: &Context) -> Result<FileFix, String> {
+    let content = read_text(file)
+        .map_err(|error| format!("{}: {error}", format_path(file, context.working_directory)))?;
 
     let Some(content) = content else {
         return Ok(FileFix {
@@ -442,7 +567,7 @@ pub fn plan_fix(
     declarations: Vec<Declaration>,
     scope: &Scope,
     working_directory: &Path,
-) -> io::Result<FixPlan> {
+) -> FixPlan {
     let cache = ExistenceCache::new(Path::exists);
 
     let declarations = declarations
@@ -471,13 +596,16 @@ pub fn plan_fix(
     };
 
     for fixed in map_in_parallel(&scope.files, |file| fix_file(file, &context)) {
-        let fixed = fixed?;
-
-        plan.findings.extend(fixed.findings);
-        plan.edits.extend(fixed.edit);
+        match fixed {
+            Ok(fixed) => {
+                plan.findings.extend(fixed.findings);
+                plan.edits.extend(fixed.edit);
+            }
+            Err(error) => plan.errors.push(error),
+        }
     }
 
-    Ok(plan)
+    plan
 }
 
 #[cfg(test)]

@@ -14,6 +14,7 @@ fn origin_of(line: usize) -> Origin {
     Origin {
         line,
         text: format!("declaration {line}"),
+        snapshot: None,
     }
 }
 
@@ -35,11 +36,37 @@ fn relocate(tree: &Tree, from: &str, to: &str, line: usize) -> Declaration {
 }
 
 fn remove(tree: &Tree, path: &str, line: usize) -> Declaration {
-    fs::remove_file(path_of(tree, path)).unwrap();
+    let removed = path_of(tree, path);
+
+    if removed.is_dir() {
+        fs::remove_dir_all(removed).unwrap();
+    } else {
+        fs::remove_file(removed).unwrap();
+    }
 
     Declaration::Delete {
         path: path_of(tree, path),
         origin: origin_of(line),
+    }
+}
+
+fn in_snapshot(declaration: Declaration, snapshot: usize) -> Declaration {
+    match declaration {
+        Declaration::Move { from, to, origin } => Declaration::Move {
+            from,
+            to,
+            origin: Origin {
+                snapshot: Some(snapshot),
+                ..origin
+            },
+        },
+        Declaration::Delete { path, origin } => Declaration::Delete {
+            path,
+            origin: Origin {
+                snapshot: Some(snapshot),
+                ..origin
+            },
+        },
     }
 }
 
@@ -61,7 +88,7 @@ struct Report {
 fn report_of(tree: &Tree, declarations: Vec<Declaration>) -> Report {
     let root = &tree.root;
     let scope = walk_scope(&[PathBuf::from(".")], &ScopeOptions::default(), root);
-    let plan = plan_fix(declarations, &scope, root).unwrap();
+    let plan = plan_fix(declarations, &scope, root);
 
     let findings = plan.findings.iter().map(|finding| {
         let written = match &finding.outcome {
@@ -426,13 +453,204 @@ fn rejects_a_move_whose_source_still_exists_or_whose_destination_is_missing() {
 
 #[cfg(windows)]
 #[test]
-fn accepts_a_case_only_rename() {
-    let tree = tree_of(&[("index.md", "see docs/A.md\n"), ("docs/A.md", "")]);
+fn rewrites_only_the_renamed_components_case() {
+    let tree = tree_of(&[
+        (
+            "index.md",
+            "see DOCS/A.md
+",
+        ),
+        ("docs/A.md", ""),
+    ]);
     let moved = relocate(&tree, "docs/A.md", "docs/a.md", 1);
 
     assert_eq!(
         report_of(&tree, vec![moved]).lines,
-        ["index.md:1:5: docs/A.md -> docs/a.md"]
+        ["index.md:1:5: DOCS/A.md -> DOCS/a.md"]
+    );
+}
+
+#[test]
+fn drops_an_exact_round_trip() {
+    let tree = tree_of(&[
+        (
+            "index.md",
+            "see docs/A.md and [x](docs/a.md)
+",
+        ),
+        ("docs/a.md", ""),
+    ]);
+    let first = relocate(&tree, "docs/a.md", "docs/b.md", 1);
+    let second = relocate(&tree, "docs/b.md", "docs/a.md", 2);
+
+    assert!(report_of(&tree, vec![first, second]).lines.is_empty());
+}
+
+#[test]
+fn rewrites_a_root_files_references_after_it_moves_down() {
+    let tree = tree_of(&[
+        (
+            "CONTRIBUTING.md",
+            "[g](g.md) [i](images/p.png)
+",
+        ),
+        ("g.md", ""),
+        ("images/p.png", ""),
+    ]);
+    let moved = relocate(&tree, "CONTRIBUTING.md", "docs/CONTRIBUTING.md", 1);
+
+    assert_eq!(
+        report_of(&tree, vec![moved]).lines,
+        [
+            "docs/CONTRIBUTING.md:1:5: g.md -> ../g.md",
+            "docs/CONTRIBUTING.md:1:15: images/p.png -> ../images/p.png"
+        ]
+    );
+}
+
+#[test]
+fn rewrites_a_sibling_reference_after_the_target_moves_up_to_the_root() {
+    let tree = tree_of(&[
+        ("docs/a.md", ""),
+        (
+            "docs/x.md",
+            "see [a](a.md)
+",
+        ),
+    ]);
+    let moved = relocate(&tree, "docs/a.md", "a.md", 1);
+
+    assert_eq!(
+        report_of(&tree, vec![moved]).lines,
+        ["docs/x.md:1:9: a.md -> ../a.md"]
+    );
+}
+
+#[test]
+fn turns_an_overwritten_destination_into_a_delete_of_its_source() {
+    let tree = tree_of(&[
+        (
+            "i.md",
+            "d/a.md d/b.md
+",
+        ),
+        ("d/a.md", "a"),
+        ("d/b.md", "b"),
+    ]);
+    let first = relocate(&tree, "d/a.md", "d/c.md", 1);
+    let second = relocate(&tree, "d/b.md", "d/c.md", 2);
+
+    assert_eq!(
+        report_of(&tree, vec![first, second]).lines,
+        [
+            "i.md:1:1: d/a.md -> d/a.md (deleted)",
+            "i.md:1:8: d/b.md -> d/c.md"
+        ]
+    );
+}
+
+#[test]
+fn applies_one_listings_records_simultaneously() {
+    let tree = tree_of(&[
+        (
+            "i.md",
+            "a.md b.md
+",
+        ),
+        ("a.md", "a"),
+        ("b.md", "b"),
+    ]);
+
+    fs::rename(path_of(&tree, "b.md"), path_of(&tree, "c.md")).unwrap();
+    fs::rename(path_of(&tree, "a.md"), path_of(&tree, "b.md")).unwrap();
+
+    let declarations = vec![
+        in_snapshot(declare_move(&tree, "a.md", "b.md", 1), 1),
+        in_snapshot(declare_move(&tree, "b.md", "c.md", 2), 1),
+    ];
+
+    assert_eq!(
+        report_of(&tree, declarations).lines,
+        ["i.md:1:1: a.md -> b.md", "i.md:1:6: b.md -> c.md"]
+    );
+}
+
+#[test]
+fn carries_an_earlier_destination_along_with_its_moved_ancestor() {
+    let tree = tree_of(&[
+        (
+            "i.md",
+            "y.md d1/x.md
+",
+        ),
+        ("y.md", ""),
+        ("d1/x.md", ""),
+    ]);
+    let first = relocate(&tree, "d1", "d2", 1);
+    let second = relocate(&tree, "y.md", "d2/y.md", 2);
+    let third = relocate(&tree, "d2", "d3", 3);
+
+    assert_eq!(
+        report_of(&tree, vec![first, second, third]).lines,
+        ["i.md:1:1: y.md -> d3/y.md", "i.md:1:6: d1/x.md -> d3/x.md"]
+    );
+}
+
+#[test]
+fn deletes_an_earlier_moves_source_when_an_ancestor_of_its_destination_is_deleted() {
+    let tree = tree_of(&[
+        (
+            "i.md", "y.md
+",
+        ),
+        ("y.md", ""),
+    ]);
+    let moved = relocate(&tree, "y.md", "d/y.md", 1);
+    let deleted = remove(&tree, "d", 2);
+
+    assert_eq!(
+        report_of(&tree, vec![moved, deleted]).lines,
+        ["i.md:1:1: y.md -> y.md (deleted)"]
+    );
+}
+
+#[test]
+fn reports_an_unreadable_file_and_fixes_the_rest() {
+    let tree = tree_of(&[
+        (
+            "index.md",
+            "see docs/a.md
+",
+        ),
+        (
+            "locked.md",
+            "see docs/a.md
+",
+        ),
+        ("docs/a.md", ""),
+    ]);
+    let moved = relocate(&tree, "docs/a.md", "docs/b.md", 1);
+    let scope = walk_scope(&[PathBuf::from(".")], &ScopeOptions::default(), &tree.root);
+
+    let Some(_lock) = crate::tree_of::lock_file(&tree.root.join("locked.md")) else {
+        eprintln!("skipped: the file stays readable for this user");
+
+        return;
+    };
+
+    let plan = plan_fix(vec![moved], &scope, &tree.root);
+
+    assert_eq!(plan.errors.len(), 1, "{:?}", plan.errors);
+    assert!(
+        plan.errors[0].starts_with("locked.md: "),
+        "{:?}",
+        plan.errors
+    );
+    assert_eq!(plan.edits.len(), 1);
+    assert_eq!(
+        plan.edits[0].content,
+        "see docs/b.md
+"
     );
 }
 

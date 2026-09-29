@@ -8,6 +8,7 @@ use crate::unquote::{unquote_git, unquote_shell};
 pub struct Origin {
     pub line: usize,
     pub text: String,
+    pub snapshot: Option<usize>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +105,7 @@ fn origin_of(line: usize, text: &str) -> Origin {
     Origin {
         line,
         text: escape_text(text),
+        snapshot: None,
     }
 }
 
@@ -114,6 +116,12 @@ fn is_status(field: &str, letters: &str) -> bool {
         .next()
         .is_some_and(|first| letters.contains(first))
         && characters.all(|character| character.is_ascii_digit())
+}
+
+fn is_listing_record(line: &[u8]) -> bool {
+    let status = line.split(|byte| *byte == b'\t').next().unwrap_or_default();
+
+    line.contains(&b'\t') && is_status(&String::from_utf8_lossy(status), "RCDAMTU")
 }
 
 fn parse_name_status(text: &str) -> Option<Result<Parsed, &'static str>> {
@@ -338,7 +346,10 @@ fn parse_records(input: &[u8], working_directory: &Path) -> (Vec<Declaration>, V
             .chain(paths.iter().map(|path| path.unwrap_or("?")))
             .collect::<Vec<_>>()
             .join("\t");
-        let origin = origin_of(index, &text);
+        let origin = Origin {
+            snapshot: Some(1),
+            ..origin_of(index, &text)
+        };
 
         if !known || paths.len() != count || paths.iter().any(Option::is_none) {
             rejected.push(reject(origin, UNRECOGNIZED));
@@ -721,6 +732,7 @@ fn parse_lines(
     working_directory: &Path,
     checks: Checks,
 ) -> (Vec<Declaration>, Vec<Rejected>) {
+    let mut snapshot = None;
     let entries: Vec<Entry> = input
         .split(|byte| *byte == b'\n')
         .enumerate()
@@ -731,8 +743,13 @@ fn parse_lines(
                 return None;
             }
 
+            snapshot = is_listing_record(line).then(|| snapshot.unwrap_or(index + 1));
+
             Some(Entry {
-                origin: origin_of(index + 1, &String::from_utf8_lossy(line)),
+                origin: Origin {
+                    snapshot,
+                    ..origin_of(index + 1, &String::from_utf8_lossy(line))
+                },
                 parsed: parse_line(line),
             })
         })

@@ -12,7 +12,11 @@ clap = { version = "4", features = ["derive"] }
 dunce = "1"
 ignore = "0.4"
 percent-encoding = "2"
+same-file = "1"
 tempfile = "3"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 
 [lints.rust]
 nonstandard_style = "deny"

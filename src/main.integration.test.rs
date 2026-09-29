@@ -1,5 +1,6 @@
 use super::*;
 use crate::tree_of::{tree_of, Tree};
+use same_file::Handle;
 
 fn outcome_of(tree: &Tree, arguments: &[&str]) -> (String, String, i32) {
     outcome_with_input_of(tree, arguments, "")
@@ -20,6 +21,7 @@ fn outcome_with_input_of(tree: &Tree, arguments: &[&str], input: &str) -> (Strin
         Ok(tree.root.clone()),
         &mut Streams {
             stdin: &mut stdin,
+            stdin_handle: None,
             stdout: &mut stdout,
             stderr: &mut stderr,
         },
@@ -242,5 +244,76 @@ refs: skipped declaration line 3: path still exists: D docs/b.md
             .to_string(),
             FINDINGS
         )
+    );
+}
+
+#[test]
+fn reports_an_unreadable_file_and_still_writes_the_rest_with_exit_two() {
+    let tree = tree_of(&[
+        ("index.md", "see docs/a.md\n"),
+        ("locked.md", "see docs/a.md\n"),
+        ("docs/a.md", ""),
+    ]);
+
+    std::fs::rename(tree.root.join("docs/a.md"), tree.root.join("docs/b.md")).unwrap();
+
+    let Some(_lock) = crate::tree_of::lock_file(&tree.root.join("locked.md")) else {
+        eprintln!("skipped: the file stays readable for this user");
+
+        return;
+    };
+
+    let (stdout, stderr, code) = outcome_with_input_of(&tree, &["-"], "R\tdocs/a.md\tdocs/b.md\n");
+
+    assert_eq!(
+        (stdout.as_str(), code),
+        ("index.md:1:5: docs/a.md -> docs/b.md\n", FAILURE)
+    );
+    assert!(stderr.starts_with("refs: locked.md: "), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert_eq!(
+        std::fs::read_to_string(tree.root.join("index.md")).unwrap(),
+        "see docs/b.md\n"
+    );
+}
+
+#[test]
+fn never_rewrites_the_file_read_as_declarations() {
+    let tree = tree_of(&[
+        ("index.md", "see docs/a.md\n"),
+        ("decl.txt", "R\tdocs/a.md\tdocs/b.md\n"),
+        ("docs/a.md", ""),
+    ]);
+
+    std::fs::rename(tree.root.join("docs/a.md"), tree.root.join("docs/b.md")).unwrap();
+
+    let declarations = tree.root.join("decl.txt");
+    let mut stdin = std::fs::File::open(&declarations).unwrap();
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+
+    let code = run(
+        ["refs", "-"].into_iter().map(OsString::from).collect(),
+        Ok(tree.root.clone()),
+        &mut Streams {
+            stdin: &mut stdin,
+            stdin_handle: Handle::from_path(&declarations).ok(),
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        },
+    );
+
+    assert_eq!(
+        String::from_utf8(stderr).unwrap(),
+        "refs: decl.txt: declaration input not rewritten\n"
+    );
+    assert_eq!(code, FINDINGS);
+    assert_eq!(
+        std::fs::read_to_string(&declarations).unwrap(),
+        "R\tdocs/a.md\tdocs/b.md\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(tree.root.join("index.md")).unwrap(),
+        "see docs/b.md\n"
     );
 }

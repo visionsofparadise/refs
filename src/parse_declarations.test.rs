@@ -191,7 +191,8 @@ fn parses_the_captured_nul_separated_records() {
             path: path_of("gone.md"),
             origin: Origin {
                 line: 3,
-                text: "D\\tgone.md".to_string()
+                text: "D\\tgone.md".to_string(),
+                snapshot: Some(1),
             },
         }
     );
@@ -458,7 +459,8 @@ fn rejects_ambiguous_lines() {
             rejected[0].origin,
             Origin {
                 line: 1,
-                text: line.to_string()
+                text: line.to_string(),
+                snapshot: None,
             }
         );
     }
@@ -543,7 +545,8 @@ fn ignores_a_bom_trailing_whitespace_carriage_returns_and_blank_lines() {
             path: path_of("a"),
             origin: Origin {
                 line: 3,
-                text: "D a".to_string()
+                text: "D a".to_string(),
+                snapshot: None,
             },
         }]
     );
@@ -579,14 +582,16 @@ fn completes_a_cross_filesystem_file_move_at_its_copied_line() {
                 to: path_of("b"),
                 origin: Origin {
                     line: 1,
-                    text: "copied 'a' -> 'b'".to_string()
+                    text: "copied 'a' -> 'b'".to_string(),
+                    snapshot: None,
                 },
             },
             Declaration::Delete {
                 path: path_of("c"),
                 origin: Origin {
                     line: 2,
-                    text: "D c".to_string()
+                    text: "D c".to_string(),
+                    snapshot: None,
                 },
             },
         ]
@@ -1018,4 +1023,33 @@ fn reads_absolute_declaration_paths() {
 #[test]
 fn normalizes_declaration_paths() {
     assert_move("R a/../b/./c.md d.md", "b/c.md", "d.md");
+}
+
+#[test]
+fn groups_a_contiguous_listing_run_into_one_snapshot() {
+    let (declarations, _) = parse(
+        "R100	a.md	b.md
+M	m.md
+R100	b.md	c.md
+renamed 'x' -> 'y'
+D	gone.md
+",
+    );
+    let snapshots: Vec<Option<usize>> = declarations
+        .iter()
+        .map(|declaration| match declaration {
+            Declaration::Move { origin, .. } | Declaration::Delete { origin, .. } => {
+                origin.snapshot
+            }
+        })
+        .collect();
+
+    assert_eq!(snapshots, [Some(1), Some(1), None, Some(5)]);
+
+    let (declarations, _) = parse_with(b"R100 a.md b.md D c.md ", &|_| false);
+
+    assert!(declarations.iter().all(|declaration| match declaration {
+        Declaration::Move { origin, .. } | Declaration::Delete { origin, .. } =>
+            origin.snapshot == Some(1),
+    }));
 }

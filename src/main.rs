@@ -16,6 +16,7 @@ mod write_edits;
 
 use clap::error::ErrorKind;
 use clap::Parser;
+use same_file::Handle;
 use std::ffi::OsString;
 use std::io::{BufWriter, Read, Write};
 use std::path::{Path, PathBuf};
@@ -34,6 +35,7 @@ const FAILURE: i32 = 2;
 
 struct Streams<'a> {
     stdin: &'a mut dyn Read,
+    stdin_handle: Option<Handle>,
     stdout: &'a mut dyn Write,
     stderr: &'a mut dyn Write,
 }
@@ -99,15 +101,7 @@ fn fix(
     );
 
     let scope = walk_scope(paths, options, working_directory);
-
-    let plan = match plan_fix(declarations, &scope, working_directory) {
-        Ok(plan) => plan,
-        Err(error) => {
-            report_scope(&scope, streams);
-
-            return streams.fail(&error.to_string());
-        }
-    };
+    let plan = plan_fix(declarations, &scope, working_directory);
 
     for finding in &plan.findings {
         let _ = writeln!(streams.stdout, "{}", line_of(finding, working_directory));
@@ -134,15 +128,23 @@ fn fix(
 
     report_scope(&scope, streams);
 
-    let mut failed = !scope.errors.is_empty();
+    for error in &plan.errors {
+        streams.report(error);
+    }
 
-    if !dry_run {
-        for edit in &plan.edits {
+    let mut failed = !scope.errors.is_empty() || !plan.errors.is_empty();
+    let mut withheld = false;
+
+    for edit in &plan.edits {
+        let file = format_path(&edit.file, working_directory);
+
+        if is_input(&edit.file, streams.stdin_handle.as_ref()) {
+            streams.report(&format!("{file}: declaration input not rewritten"));
+
+            withheld = true;
+        } else if !dry_run {
             if let Err(error) = write_edits(std::slice::from_ref(edit)) {
-                streams.report(&format!(
-                    "{}: {error}",
-                    format_path(&edit.file, working_directory)
-                ));
+                streams.report(&format!("{file}: {error}"));
 
                 failed = true;
             }
@@ -158,11 +160,15 @@ fn fix(
         .iter()
         .any(|finding| !matches!(finding.outcome, Outcome::Rewritten { .. }));
 
-    if unrepaired || !plan.unscanned.is_empty() || !rejected.is_empty() {
+    if unrepaired || withheld || !plan.unscanned.is_empty() || !rejected.is_empty() {
         return FINDINGS;
     }
 
     SUCCESS
+}
+
+fn is_input(file: &Path, stdin_handle: Option<&Handle>) -> bool {
+    stdin_handle.is_some_and(|input| Handle::from_path(file).is_ok_and(|handle| handle == *input))
 }
 
 fn list(
@@ -281,6 +287,7 @@ fn main() {
         std::env::current_dir().and_then(dunce::canonicalize),
         &mut Streams {
             stdin: &mut stdin,
+            stdin_handle: Handle::stdin().ok(),
             stdout: &mut stdout,
             stderr: &mut stderr,
         },

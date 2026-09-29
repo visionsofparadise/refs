@@ -6,12 +6,43 @@ use tempfile::NamedTempFile;
 use crate::fix_references::FileEdit;
 
 #[cfg(windows)]
-fn replace(temporary: NamedTempFile, file: &Path, permissions: fs::Permissions) -> io::Result<()> {
-    if !permissions.readonly() {
-        fs::set_permissions(temporary.path(), permissions)?;
-        temporary.persist(file)?;
+fn wide_of(path: &Path) -> Vec<u16> {
+    use std::os::windows::ffi::OsStrExt;
 
-        return Ok(());
+    path.as_os_str().encode_wide().chain([0]).collect()
+}
+
+#[cfg(windows)]
+fn replace_file(replacement: &Path, file: &Path) -> io::Result<()> {
+    use windows_sys::Win32::Storage::FileSystem::ReplaceFileW;
+
+    let replaced = wide_of(file);
+    let replacement = wide_of(replacement);
+
+    let succeeded = unsafe {
+        ReplaceFileW(
+            replaced.as_ptr(),
+            replacement.as_ptr(),
+            std::ptr::null(),
+            0,
+            std::ptr::null(),
+            std::ptr::null(),
+        )
+    };
+
+    if succeeded == 0 {
+        return Err(io::Error::last_os_error());
+    }
+
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace(temporary: NamedTempFile, file: &Path, permissions: fs::Permissions) -> io::Result<()> {
+    let temporary = temporary.into_temp_path();
+
+    if !permissions.readonly() {
+        return replace_file(&temporary, file);
     }
 
     let mut writable = permissions.clone();
@@ -19,13 +50,12 @@ fn replace(temporary: NamedTempFile, file: &Path, permissions: fs::Permissions) 
     #[allow(clippy::permissions_set_readonly_false)]
     writable.set_readonly(false);
 
-    fs::set_permissions(temporary.path(), writable.clone())?;
     fs::set_permissions(file, writable)?;
 
-    if let Err(error) = temporary.persist(file) {
+    if let Err(error) = replace_file(&temporary, file) {
         let _ = fs::set_permissions(file, permissions);
 
-        return Err(error.error);
+        return Err(error);
     }
 
     fs::set_permissions(file, permissions)

@@ -63,3 +63,32 @@ pub fn link_directory(target: &Path, link: &Path) -> bool {
         .output()
         .is_ok_and(|output| output.status.success())
 }
+
+pub struct Lock {
+    _file: Option<fs::File>,
+}
+
+#[cfg(windows)]
+pub fn lock_file(path: &Path) -> Option<Lock> {
+    use std::os::windows::fs::OpenOptionsExt;
+
+    fs::OpenOptions::new()
+        .read(true)
+        .share_mode(0)
+        .open(path)
+        .ok()
+        .map(|file| Lock { _file: Some(file) })
+}
+
+#[cfg(unix)]
+pub fn lock_file(path: &Path) -> Option<Lock> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o000)).ok()?;
+
+    if fs::read(path).is_ok() {
+        return None;
+    }
+
+    Some(Lock { _file: None })
+}
