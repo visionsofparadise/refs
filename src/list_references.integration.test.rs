@@ -36,6 +36,7 @@ fn lines_of(tree: &Tree, to: &[&str], dangling_only: bool) -> Vec<String> {
 
     list_references(&scope, &tree.work, &to, dangling_only)
         .unwrap()
+        .listed
         .into_iter()
         .map(|listed| {
             let file = listed.file.strip_prefix(&tree.work).unwrap();
@@ -148,4 +149,47 @@ fn never_flags_a_token_without_candidates_as_dangling() {
     let tree = tree_of(&[("index.md", "see a%2Fb/c.md and x/a:b.md")]);
 
     assert!(lines_of(&tree, &[], false).is_empty());
+}
+
+#[test]
+fn reports_an_unreadable_file_and_lists_the_rest() {
+    let tree = tree_of(&[("a.md", "b.md\n"), ("b.md", "")]);
+    let missing = tree.work.join("gone.md");
+
+    let scope = Scope {
+        files: vec![tree.work.join("a.md"), missing.clone()],
+        ..Scope::default()
+    };
+
+    let listing = list_references(&scope, &tree.work, &[], false).unwrap();
+
+    assert_eq!(listing.listed.len(), 1);
+    assert_eq!(listing.errors.len(), 1);
+    assert!(listing.errors[0].starts_with(&format!("{}: ", missing.display())));
+}
+
+#[test]
+fn rejects_a_to_path_that_does_not_exist() {
+    let tree = tree_of(&[]);
+
+    let error = list_references(
+        &Scope::default(),
+        &tree.work,
+        &[PathBuf::from("gone")],
+        false,
+    )
+    .unwrap_err();
+
+    assert_eq!(error.to_string(), "gone: no such file or directory");
+}
+
+#[cfg(any(windows, target_os = "macos"))]
+#[test]
+fn finds_a_differently_cased_target_on_a_case_insensitive_filesystem() {
+    let tree = tree_of(&[("a.md", "Docs/B.md docs/\n"), ("docs/b.md", "")]);
+
+    assert_eq!(
+        lines_of(&tree, &[], false),
+        ["a.md:1:1 Docs/B.md -> Docs/B.md", "a.md:1:11 docs/ -> docs"]
+    );
 }

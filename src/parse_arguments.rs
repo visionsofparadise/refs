@@ -7,23 +7,45 @@ use crate::walk_scope::ScopeOptions;
     name = "refs",
     bin_name = "refs",
     version,
-    about = "List file references and repair them from declared moves"
+    about = "List file references and repair them from declared moves",
+    after_help = "Listing: refs [PATH]... prints each reference found as <file>:<line>:<column>: <token> -> <target>.\nFixing: refs - [PATH]... reads moves and deletes from stdin (git diff --name-status, mv -v, rm -v or git mv -v output) and repairs the references those moves broke."
 )]
 pub struct Arguments {
+    #[arg(
+        value_name = "PATH",
+        help = "Files and directories to scan [default: .]; a first path of - reads declarations from stdin and fixes references"
+    )]
     pub paths: Vec<PathBuf>,
-    #[arg(long)]
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Keep references whose target is this path or lies beneath it (repeatable)"
+    )]
     pub to: Vec<PathBuf>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Keep dangling references only; exit 1 when any is printed"
+    )]
     pub dangling: bool,
-    #[arg(long)]
+    #[arg(long, help = "With -, print the rewrites without writing them")]
     pub dry_run: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Respect no ignore file: .gitignore, .ignore, .rgignore, the global gitignore or .git/info/exclude"
+    )]
     pub no_ignore: bool,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Respect no git ignore source (.gitignore, the global gitignore, .git/info/exclude); .ignore and .rgignore still apply"
+    )]
     pub no_ignore_vcs: bool,
-    #[arg(long)]
+    #[arg(long, help = "Scan hidden files and directories")]
     pub hidden: bool,
-    #[arg(short = 'u', action = clap::ArgAction::Count)]
+    #[arg(
+        short = 'u',
+        action = clap::ArgAction::Count,
+        help = "Reduce filtering as rg does: -u is --no-ignore, -uu adds --hidden, -uuu equals -uu"
+    )]
     pub unrestricted: u8,
 }
 

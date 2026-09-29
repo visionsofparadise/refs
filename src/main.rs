@@ -14,6 +14,7 @@ mod walk_scope;
 
 use clap::error::ErrorKind;
 use clap::Parser;
+use std::ffi::OsString;
 use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
@@ -26,26 +27,39 @@ const SUCCESS: i32 = 0;
 const FINDINGS: i32 = 1;
 const FAILURE: i32 = 2;
 
-fn report(message: &str) -> i32 {
-    eprintln!("refs: {message}");
-
-    FAILURE
+struct Streams<'a> {
+    stdout: &'a mut dyn Write,
+    stderr: &'a mut dyn Write,
 }
 
-fn list(
-    options: &ScopeOptions,
-    paths: &[PathBuf],
-    to: &[PathBuf],
-    dangling: bool,
-    working_directory: &Path,
-) -> std::io::Result<i32> {
-    let scope = walk_scope(paths, options, working_directory)?;
-    let listed = list_references(&scope, working_directory, to, dangling)?;
-    let mut stdout = BufWriter::new(std::io::stdout().lock());
+impl Streams<'_> {
+    fn report(&mut self, message: &str) {
+        let _ = writeln!(self.stderr, "refs: {message}");
+    }
 
-    for entry in &listed {
+    fn fail(&mut self, message: &str) -> i32 {
+        self.report(message);
+
+        FAILURE
+    }
+}
+
+struct Listing<'a> {
+    options: &'a ScopeOptions,
+    paths: &'a [PathBuf],
+    to: &'a [PathBuf],
+    dangling: bool,
+    working_directory: &'a Path,
+}
+
+fn list(listing: &Listing, streams: &mut Streams) -> std::io::Result<i32> {
+    let working_directory = listing.working_directory;
+    let scope = walk_scope(listing.paths, listing.options, working_directory)?;
+    let result = list_references(&scope, working_directory, listing.to, listing.dangling)?;
+
+    for entry in &result.listed {
         let _ = writeln!(
-            stdout,
+            streams.stdout,
             "{}:{}:{}: {}{} -> {}{}",
             format_path(&entry.file, working_directory),
             entry.token.line,
@@ -57,17 +71,33 @@ fn list(
         );
     }
 
-    let _ = stdout.flush();
+    let _ = streams.stdout.flush();
 
-    Ok(if dangling && !listed.is_empty() {
+    for warning in &scope.warnings {
+        streams.report(warning);
+    }
+
+    for error in scope.errors.iter().chain(&result.errors) {
+        streams.report(error);
+    }
+
+    if !scope.errors.is_empty() || !result.errors.is_empty() {
+        return Ok(FAILURE);
+    }
+
+    Ok(if listing.dangling && !result.listed.is_empty() {
         FINDINGS
     } else {
         SUCCESS
     })
 }
 
-fn run() -> i32 {
-    let arguments = match Arguments::try_parse() {
+fn run(
+    arguments: Vec<OsString>,
+    working_directory: std::io::Result<PathBuf>,
+    streams: &mut Streams,
+) -> i32 {
+    let arguments = match Arguments::try_parse_from(arguments) {
         Ok(arguments) => arguments,
         Err(error)
             if matches!(
@@ -75,14 +105,14 @@ fn run() -> i32 {
                 ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
             ) =>
         {
-            let _ = error.print();
+            let _ = write!(streams.stdout, "{}", error.render());
 
             return SUCCESS;
         }
         Err(error) => {
             let rendered = error.render().to_string();
 
-            return report(rendered.trim_end().trim_start_matches("error: "));
+            return streams.fail(rendered.trim_end().trim_start_matches("error: "));
         }
     };
 
@@ -93,19 +123,45 @@ fn run() -> i32 {
             to,
             dangling,
         }) => (scope, paths, to, dangling),
-        Ok(Command::Fix { .. }) => return report("- is not implemented yet"),
-        Err(message) => return report(&message),
+        Ok(Command::Fix { .. }) => return streams.fail("- is not implemented yet"),
+        Err(message) => return streams.fail(&message),
     };
 
-    let working_directory = match std::env::current_dir().and_then(dunce::canonicalize) {
+    let working_directory = match working_directory {
         Ok(directory) => directory,
-        Err(error) => return report(&format!("working directory: {error}")),
+        Err(error) => return streams.fail(&format!("working directory: {error}")),
     };
 
-    list(&options, &paths, &to, dangling, &working_directory)
-        .unwrap_or_else(|error| report(&error.to_string()))
+    let listing = Listing {
+        options: &options,
+        paths: &paths,
+        to: &to,
+        dangling,
+        working_directory: &working_directory,
+    };
+
+    list(&listing, streams).unwrap_or_else(|error| streams.fail(&error.to_string()))
 }
 
 fn main() {
-    std::process::exit(run());
+    let stdout = std::io::stdout();
+    let mut stdout = BufWriter::new(stdout.lock());
+    let mut stderr = std::io::stderr();
+
+    let code = run(
+        std::env::args_os().collect(),
+        std::env::current_dir().and_then(dunce::canonicalize),
+        &mut Streams {
+            stdout: &mut stdout,
+            stderr: &mut stderr,
+        },
+    );
+
+    let _ = stdout.flush();
+
+    std::process::exit(code);
 }
+
+#[cfg(test)]
+#[path = "main.integration.test.rs"]
+mod integration;
