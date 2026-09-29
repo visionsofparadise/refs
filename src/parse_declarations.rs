@@ -346,6 +346,7 @@ struct Sequence<'a> {
     created: Vec<PathBuf>,
     working_directory: &'a Path,
     is_directory: &'a dyn Fn(&Path) -> bool,
+    exists: &'a dyn Fn(&Path) -> bool,
 }
 
 impl Sequence<'_> {
@@ -422,7 +423,11 @@ impl Sequence<'_> {
 
                 if hand_written && (self.is_directory)(&to) {
                     if let Some(name) = from.file_name() {
-                        to = to.join(name);
+                        let inside = to.join(name);
+
+                        if (self.exists)(&inside) {
+                            to = inside;
+                        }
                     }
                 }
 
@@ -508,20 +513,8 @@ impl Sequence<'_> {
     }
 }
 
-fn parse_lines(
-    input: &[u8],
-    working_directory: &Path,
-    is_directory: &dyn Fn(&Path) -> bool,
-) -> (Vec<Declaration>, Vec<Rejected>) {
+fn parse_lines(input: &[u8], mut sequence: Sequence) -> (Vec<Declaration>, Vec<Rejected>) {
     let mut rejected = Vec::new();
-    let mut sequence = Sequence {
-        slots: Vec::new(),
-        pending: Vec::new(),
-        completed: Vec::new(),
-        created: Vec::new(),
-        working_directory,
-        is_directory,
-    };
 
     for (index, raw) in input.split(|byte| *byte == b'\n').enumerate() {
         let decoded = String::from_utf8_lossy(raw);
@@ -553,13 +546,25 @@ pub fn parse_declarations(
     input: &[u8],
     working_directory: &Path,
     is_directory: &dyn Fn(&Path) -> bool,
+    exists: &dyn Fn(&Path) -> bool,
 ) -> (Vec<Declaration>, Vec<Rejected>) {
     let input = input.strip_prefix(&BOM).unwrap_or(input);
 
     if input.contains(&0) {
         parse_records(input, working_directory)
     } else {
-        parse_lines(input, working_directory, is_directory)
+        parse_lines(
+            input,
+            Sequence {
+                slots: Vec::new(),
+                pending: Vec::new(),
+                completed: Vec::new(),
+                created: Vec::new(),
+                working_directory,
+                is_directory,
+                exists,
+            },
+        )
     }
 }
 

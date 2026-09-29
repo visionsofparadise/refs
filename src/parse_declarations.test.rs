@@ -27,7 +27,7 @@ fn parse_with(
     input: &[u8],
     is_directory: &dyn Fn(&Path) -> bool,
 ) -> (Vec<Declaration>, Vec<Rejected>) {
-    parse_declarations(input, &directory(), is_directory)
+    parse_declarations(input, &directory(), is_directory, is_directory)
 }
 
 fn parse(input: &str) -> (Vec<Declaration>, Vec<Rejected>) {
@@ -610,16 +610,23 @@ fn moves_an_empty_top_level_directory_named_by_a_created_line() {
 
 #[test]
 fn moves_into_an_existing_directory_only_for_the_plain_space_form() {
-    let directory_of = |path: &Path| path == under("docs");
+    let parse_tree = |input: &[u8]| {
+        parse_declarations(
+            input,
+            &directory(),
+            &|path: &Path| path == under("docs"),
+            &|path: &Path| path == under("docs") || path == under("docs/a.md"),
+        )
+    };
 
-    let (declarations, _) = parse_with(b"R a.md docs\n", &directory_of);
+    let (declarations, _) = parse_tree(b"R a.md docs\n");
 
     assert_eq!(
         moves_of(&declarations),
         vec![(under("a.md"), under("docs/a.md"))]
     );
 
-    let (declarations, _) = parse_with(b"R a.md notes\n", &directory_of);
+    let (declarations, _) = parse_tree(b"R a.md notes\n");
 
     assert_eq!(
         moves_of(&declarations),
@@ -633,7 +640,7 @@ fn moves_into_an_existing_directory_only_for_the_plain_space_form() {
         "a.md -> docs",
         "Renaming a.md to docs",
     ] {
-        let (declarations, _) = parse_with(line.as_bytes(), &directory_of);
+        let (declarations, _) = parse_tree(line.as_bytes());
 
         assert_eq!(
             moves_of(&declarations),
@@ -642,7 +649,7 @@ fn moves_into_an_existing_directory_only_for_the_plain_space_form() {
         );
     }
 
-    let (declarations, _) = parse_with(b"R100\0a.md\0docs\0", &directory_of);
+    let (declarations, _) = parse_tree(b"R100\0a.md\0docs\0");
 
     assert_eq!(
         moves_of(&declarations),
@@ -694,4 +701,16 @@ fn reads_absolute_declaration_paths() {
 #[test]
 fn normalizes_declaration_paths() {
     assert_move("R a/../b/./c.md d.md", "b/c.md", "d.md");
+}
+
+#[test]
+fn keeps_a_directory_rename_onto_an_existing_directory_without_the_entry() {
+    let (declarations, _) = parse_declarations(
+        b"R d1 docs\n",
+        &directory(),
+        &|path: &Path| path == under("docs"),
+        &|path: &Path| path == under("docs"),
+    );
+
+    assert_eq!(moves_of(&declarations), vec![(under("d1"), under("docs"))]);
 }
