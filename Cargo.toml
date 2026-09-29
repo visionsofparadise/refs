@@ -21,6 +21,9 @@ windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }
 [lints.rust]
 nonstandard_style = "deny"
 
+[profile.dev]
+debug = false
+
 [profile.release]
 lto = true
 codegen-units = 1
