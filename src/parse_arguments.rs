@@ -8,12 +8,12 @@ use crate::walk_scope::ScopeOptions;
     bin_name = "refs",
     version,
     about = "List file references and repair them from declared moves",
-    after_help = "Listing: refs [PATH]... prints each reference found as <file>:<line>:<column>: <token> -> <target>.\nFixing: refs - [PATH]... reads moves and deletes from stdin (git diff --name-status, mv -v, rm -v or git mv -v output) and repairs the references those moves broke."
+    after_help = "Each reference prints as <file>:<line>:<column>: <token> -> <target>, with (dangling) appended to a dangling one.\n\nExit codes: 0 on success; 1 when --dangling printed a line; 2 on a usage or I/O error."
 )]
 pub struct Arguments {
     #[arg(
         value_name = "PATH",
-        help = "Files and directories to scan [default: .]; a first path of - reads declarations from stdin and fixes references"
+        help = "Files and directories to scan [default: .]; a first path of - selects fix mode, which reads move and delete declarations from stdin"
     )]
     pub paths: Vec<PathBuf>,
     #[arg(
@@ -27,7 +27,7 @@ pub struct Arguments {
         help = "Keep dangling references only; exit 1 when any is printed"
     )]
     pub dangling: bool,
-    #[arg(long, help = "With -, print the rewrites without writing them")]
+    #[arg(long, help = "In fix mode, print the rewrites without writing them")]
     pub dry_run: bool,
     #[arg(
         long,
@@ -39,7 +39,10 @@ pub struct Arguments {
         help = "Respect no git ignore source (.gitignore, the global gitignore, .git/info/exclude); .ignore and .rgignore still apply"
     )]
     pub no_ignore_vcs: bool,
-    #[arg(long, help = "Scan hidden files and directories")]
+    #[arg(
+        long,
+        help = "Scan hidden files and directories; .git, .hg, .svn, .jj and .bzr entries stay excluded"
+    )]
     pub hidden: bool,
     #[arg(
         short = 'u',

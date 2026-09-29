@@ -8,6 +8,8 @@ mod path_text;
 mod render_reference;
 mod resolve_reference;
 mod tokenize_references;
+#[cfg(test)]
+mod tree_of;
 #[allow(dead_code)]
 mod unquote;
 mod walk_scope;
@@ -19,7 +21,7 @@ use std::io::{BufWriter, Write};
 use std::path::{Path, PathBuf};
 
 use format_path::format_path;
-use list_references::list_references;
+use list_references::{list_references, resolve_targets};
 use parse_arguments::{parse_arguments, Arguments, Command};
 use walk_scope::{walk_scope, ScopeOptions};
 
@@ -44,20 +46,29 @@ impl Streams<'_> {
     }
 }
 
-struct Listing<'a> {
-    options: &'a ScopeOptions,
-    paths: &'a [PathBuf],
-    to: &'a [PathBuf],
+fn list(
+    options: &ScopeOptions,
+    paths: &[PathBuf],
+    to: &[PathBuf],
     dangling: bool,
-    working_directory: &'a Path,
-}
+    working_directory: &Path,
+    streams: &mut Streams,
+) -> i32 {
+    let to = match resolve_targets(to, working_directory) {
+        Ok(to) => to,
+        Err(errors) => {
+            for error in &errors {
+                streams.report(error);
+            }
 
-fn list(listing: &Listing, streams: &mut Streams) -> std::io::Result<i32> {
-    let working_directory = listing.working_directory;
-    let scope = walk_scope(listing.paths, listing.options, working_directory)?;
-    let result = list_references(&scope, working_directory, listing.to, listing.dangling)?;
+            return FAILURE;
+        }
+    };
 
-    for entry in &result.listed {
+    let scope = walk_scope(paths, options, working_directory);
+    let listing = list_references(&scope, working_directory, &to, dangling);
+
+    for entry in &listing.listed {
         let _ = writeln!(
             streams.stdout,
             "{}:{}:{}: {}{} -> {}{}",
@@ -73,23 +84,24 @@ fn list(listing: &Listing, streams: &mut Streams) -> std::io::Result<i32> {
 
     let _ = streams.stdout.flush();
 
-    for warning in &scope.warnings {
-        streams.report(warning);
+    for message in scope
+        .warnings
+        .iter()
+        .chain(&scope.errors)
+        .chain(&listing.errors)
+    {
+        streams.report(message);
     }
 
-    for error in scope.errors.iter().chain(&result.errors) {
-        streams.report(error);
+    if !scope.errors.is_empty() || !listing.errors.is_empty() {
+        return FAILURE;
     }
 
-    if !scope.errors.is_empty() || !result.errors.is_empty() {
-        return Ok(FAILURE);
+    if dangling && !listing.listed.is_empty() {
+        return FINDINGS;
     }
 
-    Ok(if listing.dangling && !result.listed.is_empty() {
-        FINDINGS
-    } else {
-        SUCCESS
-    })
+    SUCCESS
 }
 
 fn run(
@@ -111,8 +123,9 @@ fn run(
         }
         Err(error) => {
             let rendered = error.render().to_string();
+            let first_line = rendered.lines().next().unwrap_or_default();
 
-            return streams.fail(rendered.trim_end().trim_start_matches("error: "));
+            return streams.fail(first_line.trim_start_matches("error: "));
         }
     };
 
@@ -132,15 +145,7 @@ fn run(
         Err(error) => return streams.fail(&format!("working directory: {error}")),
     };
 
-    let listing = Listing {
-        options: &options,
-        paths: &paths,
-        to: &to,
-        dangling,
-        working_directory: &working_directory,
-    };
-
-    list(&listing, streams).unwrap_or_else(|error| streams.fail(&error.to_string()))
+    list(&options, &paths, &to, dangling, &working_directory, streams)
 }
 
 fn main() {

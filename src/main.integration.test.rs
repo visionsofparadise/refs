@@ -1,28 +1,5 @@
 use super::*;
-use std::fs;
-use tempfile::TempDir;
-
-struct Tree {
-    _directory: TempDir,
-    root: PathBuf,
-}
-
-fn tree_of(files: &[(&str, &str)]) -> Tree {
-    let directory = TempDir::new().unwrap();
-    let root = dunce::canonicalize(directory.path()).unwrap();
-
-    for (name, content) in files {
-        let path = root.join(name);
-
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, content).unwrap();
-    }
-
-    Tree {
-        _directory: directory,
-        root,
-    }
-}
+use crate::tree_of::{tree_of, Tree};
 
 fn outcome_of(tree: &Tree, arguments: &[&str]) -> (String, String, i32) {
     let mut stdout = Vec::new();
@@ -131,19 +108,48 @@ fn rejects_a_missing_to_path_with_exit_two() {
     );
 }
 
-#[cfg(unix)]
 #[test]
-fn reports_an_unreadable_file_after_listing_the_rest_with_exit_two() {
-    use std::os::unix::fs::PermissionsExt;
+fn reports_a_missing_path_argument_after_listing_the_rest_with_exit_two() {
+    let tree = tree_of(&[("a.md", "b.md\n"), ("b.md", "")]);
 
-    let tree = tree_of(&[("a.md", "b.md\n"), ("b.md", ""), ("c.md", "b.md\n")]);
-    let locked = tree.root.join("a.md");
+    assert_eq!(
+        outcome_of(&tree, &["missing.md", "a.md"]),
+        (
+            "a.md:1:1: b.md -> b.md\n".to_string(),
+            "refs: missing.md: no such file or directory\n".to_string(),
+            FAILURE
+        )
+    );
+}
 
-    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-
+#[test]
+fn keeps_the_exit_code_on_an_ignore_file_warning() {
+    let tree = tree_of(&[(".ignore", "[z-a\n"), ("a.md", "")]);
     let (stdout, stderr, code) = outcome_of(&tree, &[]);
 
-    assert_eq!(stdout, "c.md:1:1: b.md -> b.md\n");
-    assert!(stderr.starts_with(&format!("refs: {}: ", locked.display())));
-    assert_eq!(code, FAILURE);
+    assert_eq!((stdout.as_str(), code), ("", SUCCESS));
+    assert!(stderr.starts_with("refs: .ignore: line 1: "), "{stderr}");
+    assert_eq!(stderr.lines().count(), 1);
+}
+
+#[test]
+fn prints_only_the_first_line_of_a_clap_error() {
+    let tree = tree_of(&[]);
+    let (_, stderr, _) = outcome_of(&tree, &["--bogus"]);
+
+    assert_eq!(stderr, "refs: unexpected argument '--bogus' found\n");
+}
+
+#[test]
+fn validates_to_paths_before_walking() {
+    let tree = tree_of(&[("a.md", "")]);
+
+    assert_eq!(
+        outcome_of(&tree, &["missing.md", "--to", "gone"]),
+        (
+            String::new(),
+            "refs: gone: no such file or directory\n".to_string(),
+            FAILURE
+        )
+    );
 }

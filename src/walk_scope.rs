@@ -1,11 +1,13 @@
 use ignore::WalkBuilder;
 use std::collections::{BTreeMap, HashSet};
-use std::io::{Error, ErrorKind};
+use std::io::ErrorKind;
 use std::path::{Component, Path, PathBuf};
 
+use crate::format_path::format_path;
+use crate::path_text::is_separator;
 use crate::resolve_reference::{key_of, normalize_path, parse_absolute};
 
-const VCS_DIRECTORIES: [&str; 5] = [".git", ".hg", ".svn", ".jj", ".bzr"];
+const VCS_NAMES: [&str; 5] = [".git", ".hg", ".svn", ".jj", ".bzr"];
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ScopeOptions {
@@ -24,15 +26,9 @@ pub struct Scope {
 }
 
 fn is_vcs_name(name: &std::ffi::OsStr) -> bool {
-    let name = name.to_string_lossy();
+    let key = key_of(Path::new(name));
 
-    VCS_DIRECTORIES
-        .iter()
-        .any(|vcs| key_of(Path::new(vcs)) == key_of(Path::new(name.as_ref())))
-}
-
-fn is_vcs_directory(entry: &ignore::DirEntry) -> bool {
-    entry.file_type().is_some_and(|kind| kind.is_dir()) && is_vcs_name(entry.file_name())
+    VCS_NAMES.iter().any(|vcs| key_of(Path::new(vcs)) == key)
 }
 
 fn is_inside_vcs(path: &Path) -> bool {
@@ -42,45 +38,104 @@ fn is_inside_vcs(path: &Path) -> bool {
     })
 }
 
-pub fn resolve_argument(path: &Path, working_directory: &Path) -> PathBuf {
-    match path.to_str().and_then(parse_absolute) {
-        Some((absolute, _)) => absolute,
-        None => normalize_path(&working_directory.join(path)),
+pub fn resolve_argument(path: &Path, working_directory: &Path) -> Option<PathBuf> {
+    let path = dunce::simplified(path);
+
+    let Some(text) = path.to_str() else {
+        return Some(normalize_path(&working_directory.join(path)));
+    };
+
+    if let Some((absolute, _)) = parse_absolute(text) {
+        return Some(absolute);
     }
+
+    if text.starts_with(is_separator) || text.contains(':') {
+        return None;
+    }
+
+    Some(normalize_path(&working_directory.join(text)))
 }
 
-fn root_of(path: &Path, working_directory: &Path) -> std::io::Result<PathBuf> {
-    let root = resolve_argument(path, working_directory);
+pub fn missing_message_of(path: &Path, error: &std::io::Error, working_directory: &Path) -> String {
+    let path = format_path(path, working_directory);
 
-    if is_inside_vcs(&root) {
-        return Err(Error::new(
-            ErrorKind::InvalidInput,
-            format!("{}: inside a VCS directory", path.display()),
-        ));
+    if error.kind() == ErrorKind::NotFound {
+        return format!("{path}: no such file or directory");
     }
 
-    if root.symlink_metadata().is_err() {
-        return Err(Error::new(
-            ErrorKind::NotFound,
-            format!("{}: no such file or directory", path.display()),
+    format!("{path}: {error}")
+}
+
+fn root_of(path: &Path, working_directory: &Path) -> Result<PathBuf, String> {
+    let Some(root) = resolve_argument(path, working_directory) else {
+        return Err(format!("{}: unsupported path", path.display()));
+    };
+
+    if let Err(error) = root.symlink_metadata() {
+        return Err(missing_message_of(&root, &error, working_directory));
+    }
+
+    let canonical = dunce::canonicalize(&root).unwrap_or_else(|_| root.clone());
+
+    if is_inside_vcs(&root) || is_inside_vcs(&canonical) {
+        return Err(format!(
+            "{}: inside a VCS directory",
+            format_path(&root, working_directory)
         ));
     }
 
     Ok(root)
 }
 
-pub fn walk_scope(
-    paths: &[PathBuf],
-    options: &ScopeOptions,
-    working_directory: &Path,
-) -> std::io::Result<Scope> {
-    let roots = paths
-        .iter()
-        .map(|path| root_of(path, working_directory))
-        .collect::<std::io::Result<Vec<PathBuf>>>()?;
+fn is_ignore_file_error(error: &ignore::Error) -> bool {
+    match error {
+        ignore::Error::Partial(_) | ignore::Error::Glob { .. } => true,
+        ignore::Error::WithLineNumber { err, .. }
+        | ignore::Error::WithPath { err, .. }
+        | ignore::Error::WithDepth { err, .. } => is_ignore_file_error(err),
+        _ => false,
+    }
+}
+
+fn messages_of(error: &ignore::Error, working_directory: &Path) -> Vec<String> {
+    let format = |path: &Path| format_path(dunce::simplified(path), working_directory);
+
+    match error {
+        ignore::Error::Partial(errors) => errors
+            .iter()
+            .flat_map(|error| messages_of(error, working_directory))
+            .collect(),
+        ignore::Error::WithLineNumber { line, err } => messages_of(err, working_directory)
+            .into_iter()
+            .map(|message| format!("line {line}: {message}"))
+            .collect(),
+        ignore::Error::WithPath { path, err } => messages_of(err, working_directory)
+            .into_iter()
+            .map(|message| format!("{}: {message}", format(path)))
+            .collect(),
+        ignore::Error::WithDepth { err, .. } => messages_of(err, working_directory),
+        ignore::Error::Loop { ancestor, child } => vec![format!(
+            "{}: file system loop to its ancestor {}",
+            format(child),
+            format(ancestor)
+        )],
+        other => vec![other.to_string().replace(['\r', '\n'], " ")],
+    }
+}
+
+pub fn walk_scope(paths: &[PathBuf], options: &ScopeOptions, working_directory: &Path) -> Scope {
+    let mut scope = Scope::default();
+    let mut roots = Vec::new();
+
+    for path in paths {
+        match root_of(path, working_directory) {
+            Ok(root) => roots.push(root),
+            Err(message) => scope.errors.push(message),
+        }
+    }
 
     let Some((first, rest)) = roots.split_first() else {
-        return Ok(Scope::default());
+        return scope;
     };
 
     let mut builder = WalkBuilder::new(first);
@@ -105,23 +160,28 @@ pub fn walk_scope(
     builder
         .hidden(!options.hidden)
         .follow_links(false)
-        .filter_entry(|entry| !is_vcs_directory(entry));
+        .filter_entry(|entry| !is_vcs_name(entry.file_name()));
 
     let mut files = BTreeMap::new();
-    let mut scope = Scope::default();
 
     for result in builder.build() {
         let entry = match result {
             Ok(entry) => entry,
             Err(error) => {
-                scope.errors.push(error.to_string());
+                let messages = messages_of(&error, working_directory);
+
+                if is_ignore_file_error(&error) {
+                    scope.warnings.extend(messages);
+                } else {
+                    scope.errors.extend(messages);
+                }
 
                 continue;
             }
         };
 
         if let Some(error) = entry.error() {
-            scope.warnings.push(error.to_string());
+            scope.warnings.extend(messages_of(error, working_directory));
         }
 
         let key = key_of(entry.path());
@@ -137,7 +197,11 @@ pub fn walk_scope(
 
     scope.files = files.into_values().collect();
 
-    Ok(scope)
+    scope
+        .files
+        .sort_by_cached_key(|file| format_path(file, working_directory));
+
+    scope
 }
 
 pub fn read_text(path: &Path) -> std::io::Result<Option<String>> {
