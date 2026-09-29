@@ -128,7 +128,8 @@ fn yields_no_candidate_for_a_rooted_path_without_a_drive() {
 #[test]
 fn yields_no_candidate_for_a_colon_outside_the_drive_position() {
     assert!(targets_of("C:a.md").is_empty());
-    assert!(targets_of("a:b/c.md").is_empty());
+    assert!(targets_of("C:/x/a:b.md").is_empty());
+    assert!(targets_of("/c/x:y.md").is_empty());
 }
 
 #[cfg(windows)]
@@ -293,4 +294,51 @@ fn detects_and_strips_a_posix_file_url() {
 fn records_the_written_scheme_case() {
     assert_eq!(style_of("FILE:///x/a.md").scheme, "FILE");
     assert_eq!(style_of("a.md").scheme, "");
+}
+
+#[test]
+fn yields_no_candidate_for_a_relative_path_with_a_colon() {
+    assert!(targets_of("a:b/c.md").is_empty());
+}
+
+#[cfg(not(windows))]
+#[test]
+fn yields_no_candidate_for_a_drive_path_off_windows() {
+    assert!(targets_of(r"C:\Users\x.md").is_empty());
+    assert!(targets_of("C:/x.md").is_empty());
+}
+
+#[test]
+fn yields_no_candidate_when_decoding_yields_a_separator() {
+    assert!(targets_of("docs%2Fa.md").is_empty());
+    assert!(targets_of("docs%5ca.md").is_empty());
+}
+
+#[test]
+fn records_the_hex_case() {
+    assert!(style_of("%c3%a9.md").lowercase_hex);
+    assert!(!style_of("%C3%A9.md").lowercase_hex);
+    assert!(!style_of("a%20b.md").lowercase_hex);
+}
+
+#[cfg(not(windows))]
+#[test]
+fn takes_the_separator_after_the_root() {
+    assert_eq!(style_of(r"/x\a.md").separator, '\\');
+    assert_eq!(style_of("/a.md").separator, '/');
+}
+
+#[cfg(windows)]
+#[test]
+fn takes_the_separator_after_a_drive_or_msys_root() {
+    assert_eq!(style_of(r"/c\x\a.md").separator, '\\');
+    assert_eq!(style_of(r"C:\x/a.md").separator, '/');
+    assert_eq!(style_of(r"C:\a.md").separator, '\\');
+}
+
+#[cfg(windows)]
+#[test]
+fn records_no_encoded_drive_colon_for_a_literal_colon() {
+    assert!(!style_of("file:///C:/x/a.md").encoded_drive_colon);
+    assert!(!style_of("file:///C:/my%20dir/a.md").encoded_drive_colon);
 }

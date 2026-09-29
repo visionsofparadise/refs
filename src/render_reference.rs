@@ -119,6 +119,27 @@ fn split_absolute(
     }
 }
 
+fn lowercase_escapes(text: &str) -> String {
+    let mut lowered = String::with_capacity(text.len());
+    let mut pending = 0;
+
+    for character in text.chars() {
+        if pending > 0 {
+            lowered.push(character.to_ascii_lowercase());
+
+            pending -= 1;
+        } else {
+            if character == '%' {
+                pending = 2;
+            }
+
+            lowered.push(character);
+        }
+    }
+
+    lowered
+}
+
 fn is_relative(form: &PathForm) -> bool {
     matches!(
         form,
@@ -152,15 +173,20 @@ fn round_trips(
     let target_key = key_of(target);
     let shared_base = key_of(referrer_directory) == key_of(working_directory);
 
-    resolve_reference(rendered, referrer_directory, working_directory)
-        .0
-        .iter()
-        .any(|candidate| {
-            let same_form = candidate.form == *form
-                || (shared_base && is_relative(form) && is_relative(&candidate.form));
+    for candidate in resolve_reference(rendered, referrer_directory, working_directory).0 {
+        let same_form = candidate.form == *form
+            || (shared_base && is_relative(form) && is_relative(&candidate.form));
 
-            same_form && key_of(&candidate.target) == target_key
-        })
+        if same_form && key_of(&candidate.target) == target_key {
+            return true;
+        }
+
+        if candidate.target.exists() {
+            return false;
+        }
+    }
+
+    false
 }
 
 pub fn render_reference(
@@ -177,7 +203,7 @@ pub fn render_reference(
         PathForm::Absolute(absolute) => split_absolute(target, *absolute, style)?,
     };
 
-    let names: Vec<String> = if style.percent_encoded {
+    let mut names: Vec<String> = if style.percent_encoded {
         names
             .iter()
             .map(|name| utf8_percent_encode(name, ENCODED).to_string())
@@ -186,7 +212,17 @@ pub fn render_reference(
         names
     };
 
+    if style.percent_encoded && head.is_empty() {
+        if let Some(rest) = names.first().and_then(|name| name.strip_prefix('~')) {
+            names[0] = format!("%7E{rest}");
+        }
+    }
+
     let mut rendered = head + &names.join(&style.separator.to_string());
+
+    if style.percent_encoded && style.lowercase_hex {
+        rendered = lowercase_escapes(&rendered);
+    }
 
     if style.trailing_separator && !rendered.ends_with(style.separator) {
         rendered.push(style.separator);

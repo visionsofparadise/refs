@@ -14,30 +14,49 @@ const BYTE_ORDER_MARK: char = '\u{feff}';
 
 const EMPHASIS_MARKERS: [&str; 2] = ["**", "*"];
 
-fn ends_with_trimmable_dot(text: &str) -> bool {
-    match text.strip_suffix('.') {
-        Some(rest) => {
-            !rest.ends_with(|character: char| character == '.' || is_separator(character))
-        }
-        None => false,
+fn emphasis_length_of(text: &str) -> Option<usize> {
+    let marker = EMPHASIS_MARKERS.iter().find(|marker| {
+        text.len() >= 2 * marker.len() && text.starts_with(*marker) && text.ends_with(*marker)
+    });
+
+    if let Some(marker) = marker {
+        return Some(marker.len());
     }
+
+    let single_underscore = text.len() >= 2
+        && text.starts_with('_')
+        && text.ends_with('_')
+        && !text.starts_with("__")
+        && !text.ends_with("__");
+
+    single_underscore.then_some(1)
+}
+
+fn trailing_dots_of(text: &str) -> usize {
+    let dots = text.len() - text.trim_end_matches('.').len();
+    let last_segment = text.rsplit(is_separator).next().unwrap_or(text);
+
+    if last_segment.len() == dots {
+        return 0;
+    }
+
+    dots
 }
 
 fn trim(content: &str, mut start: usize, mut end: usize) -> (usize, usize) {
     loop {
         let text = &content[start..end];
+        let dots = trailing_dots_of(text);
 
-        let emphasis = EMPHASIS_MARKERS.iter().find(|marker| {
-            text.len() >= 2 * marker.len() && text.starts_with(*marker) && text.ends_with(*marker)
-        });
-
-        if let Some(marker) = emphasis {
-            start += marker.len();
-            end -= marker.len();
+        if let Some(length) = emphasis_length_of(text) {
+            start += length;
+            end -= length;
         } else if text.starts_with('@') {
             start += 1;
-        } else if text.ends_with([':', ',']) || ends_with_trimmable_dot(text) {
+        } else if text.ends_with([':', ',']) {
             end -= 1;
+        } else if dots > 0 {
+            end -= dots;
         } else {
             return (start, end);
         }
@@ -83,11 +102,17 @@ fn is_git_coordinate(text: &str) -> bool {
     }
 }
 
+fn is_remote(text: &str) -> bool {
+    text.split_once(':')
+        .is_some_and(|(head, _)| head.contains('@'))
+}
+
 fn is_excluded(text: &str) -> bool {
     text.contains('*')
         || text.starts_with('~')
         || is_git_coordinate(text)
         || has_foreign_scheme(text)
+        || is_remote(text)
 }
 
 fn find_line_suffix(text: &str) -> Option<usize> {
@@ -115,7 +140,10 @@ fn find_suffix(text: &str) -> usize {
 }
 
 fn is_path_shaped(path: &str) -> bool {
-    path.contains(is_separator) || has_interior_dot(path)
+    let has_separator = path.contains(is_separator);
+    let has_name = path.contains(|character: char| !is_separator(character));
+
+    (has_separator && has_name) || has_interior_dot(path)
 }
 
 fn read_token(

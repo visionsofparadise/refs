@@ -162,3 +162,28 @@ fn keeps_underscore_pairs() {
         vec!["__fixtures__/x/__mocks__"]
     );
 }
+
+#[test]
+fn trims_a_single_underscore_emphasis_pair() {
+    assert_eq!(paths_of("_a.md_ _docs/a.md_"), vec!["a.md", "docs/a.md"]);
+}
+
+#[test]
+fn trims_a_trailing_run_of_dots() {
+    assert_eq!(paths_of("see src/a.md..."), vec!["src/a.md"]);
+}
+
+#[test]
+fn ignores_separator_only_paths() {
+    assert!(tokenize_references("/ // ///").is_empty());
+}
+
+#[test]
+fn excludes_scp_style_remotes() {
+    assert!(tokenize_references("git@github.com:org/repo.git user@host:path/a.md").is_empty());
+}
+
+#[test]
+fn excludes_file_urls_without_an_authority() {
+    assert!(tokenize_references("file:x.md file:/x.md").is_empty());
+}

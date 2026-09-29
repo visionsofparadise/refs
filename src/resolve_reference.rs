@@ -32,6 +32,7 @@ pub struct PathStyle {
     pub scheme: String,
     pub lowercase_drive: bool,
     pub encoded_drive_colon: bool,
+    pub lowercase_hex: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -174,10 +175,25 @@ fn strip_drive_slash(path: &str) -> &str {
     path
 }
 
-fn has_percent_escape(path: &str) -> bool {
-    path.as_bytes().windows(3).any(|window| {
+fn escapes_of(path: &str) -> impl Iterator<Item = &[u8]> {
+    path.as_bytes().windows(3).filter(|window| {
         window[0] == b'%' && window[1].is_ascii_hexdigit() && window[2].is_ascii_hexdigit()
     })
+}
+
+fn has_encoded_separator(path: &str) -> bool {
+    escapes_of(path).any(|escape| {
+        let code = escape[1..].to_ascii_uppercase();
+
+        code == b"2F" || code == b"5C"
+    })
+}
+
+fn has_lowercase_hex(path: &str) -> bool {
+    escapes_of(path)
+        .flat_map(|escape| [escape[1], escape[2]])
+        .find(u8::is_ascii_alphabetic)
+        .is_some_and(|digit| digit.is_ascii_lowercase())
 }
 
 fn drive_letter_of(path: &str) -> Option<u8> {
@@ -207,12 +223,50 @@ fn has_encoded_drive_colon(path: &str, file_scheme: bool) -> bool {
             .is_some_and(|colon| colon.eq_ignore_ascii_case("%3A"))
 }
 
+fn root_length_of(path: &str) -> usize {
+    let bytes = path.as_bytes();
+
+    let separator_at = |index: usize| {
+        bytes
+            .get(index)
+            .is_some_and(|byte| is_separator(char::from(*byte)))
+    };
+
+    if cfg!(windows) && drive_letter_of(path).is_some() && separator_at(2) {
+        return 3;
+    }
+
+    usize::from(separator_at(0))
+}
+
+fn separator_of(path: &str) -> char {
+    let (root, rest) = path.split_at(root_length_of(path));
+
+    rest.chars()
+        .find(|character| is_separator(*character))
+        .or_else(|| {
+            root.chars()
+                .rev()
+                .find(|character| is_separator(*character))
+        })
+        .unwrap_or('/')
+}
+
+fn has_foreign_colon(path: &str) -> bool {
+    path.match_indices(':')
+        .any(|(index, _)| !cfg!(windows) || index != 1)
+}
+
 fn build_candidates(
     path: &str,
     file_scheme: bool,
     referrer_directory: &Path,
     working_directory: &Path,
 ) -> Vec<Candidate> {
+    if has_foreign_colon(path) {
+        return Vec::new();
+    }
+
     if let Some((target, style)) = parse_absolute(path) {
         #[cfg(windows)]
         if file_scheme && style == AbsoluteStyle::Msys {
@@ -225,9 +279,7 @@ fn build_candidates(
         }];
     }
 
-    let unanchored = path.starts_with(is_separator) || (cfg!(windows) && path.contains(':'));
-
-    if file_scheme || unanchored {
+    if file_scheme || path.starts_with(is_separator) || path.contains(':') {
         return Vec::new();
     }
 
@@ -264,7 +316,7 @@ pub fn resolve_reference(
         path.to_string()
     };
 
-    let decoded = if has_percent_escape(&undoubled) {
+    let decoded = if escapes_of(&undoubled).next().is_some() {
         percent_decode_str(&undoubled)
             .decode_utf8()
             .ok()
@@ -275,6 +327,7 @@ pub fn resolve_reference(
 
     let percent_encoded = decoded.is_some();
     let decoded = decoded.unwrap_or_else(|| undoubled.clone());
+
     let path = if file_scheme {
         strip_drive_slash(&decoded)
     } else {
@@ -282,10 +335,7 @@ pub fn resolve_reference(
     };
 
     let style = PathStyle {
-        separator: path
-            .chars()
-            .find(|character| is_separator(*character))
-            .unwrap_or('/'),
+        separator: separator_of(path),
         doubled_backslashes,
         dot_prefix: path.starts_with("./") || path.starts_with(".\\"),
         trailing_separator: path.ends_with(is_separator),
@@ -294,12 +344,16 @@ pub fn resolve_reference(
         scheme: scheme.unwrap_or_default().to_string(),
         lowercase_drive: drive_letter_of(path).is_some_and(|letter| letter.is_ascii_lowercase()),
         encoded_drive_colon: percent_encoded && has_encoded_drive_colon(&undoubled, file_scheme),
+        lowercase_hex: percent_encoded && has_lowercase_hex(&undoubled),
     };
 
-    (
-        build_candidates(path, file_scheme, referrer_directory, working_directory),
-        style,
-    )
+    let candidates = if percent_encoded && has_encoded_separator(&undoubled) {
+        Vec::new()
+    } else {
+        build_candidates(path, file_scheme, referrer_directory, working_directory)
+    };
+
+    (candidates, style)
 }
 
 #[cfg(test)]

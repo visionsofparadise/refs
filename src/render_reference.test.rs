@@ -1,4 +1,5 @@
 use super::*;
+use std::fs;
 use std::path::PathBuf;
 
 fn absolute_path_of(names: &[&str]) -> PathBuf {
@@ -26,6 +27,7 @@ fn create_plain_style() -> PathStyle {
         scheme: String::new(),
         lowercase_drive: false,
         encoded_drive_colon: false,
+        lowercase_hex: false,
     }
 }
 
@@ -380,5 +382,113 @@ fn renders_a_posix_file_url() {
         )
         .as_deref(),
         Some("file:///x/a.md")
+    );
+}
+
+#[test]
+fn renders_a_working_directory_form_when_the_referrer_is_the_working_directory() {
+    let work = absolute_path_of(&["work"]);
+
+    assert_eq!(
+        render_reference(
+            &absolute_path_of(&["work", "docs", "a.md"]),
+            &PathForm::WorkingDirectoryRelative,
+            &create_plain_style(),
+            "",
+            &work,
+            &work,
+        )
+        .as_deref(),
+        Some("docs/a.md")
+    );
+}
+
+#[test]
+fn reports_a_rendering_an_earlier_existing_candidate_would_shadow() {
+    let root = std::env::temp_dir().join(format!("refs-render-shadow-{}", std::process::id()));
+    let notes = root.join("notes");
+    let shadow = notes.join("x").join("b.md");
+
+    let render_into_root = || {
+        render_reference(
+            &root.join("x").join("b.md"),
+            &PathForm::WorkingDirectoryRelative,
+            &create_plain_style(),
+            "",
+            &notes,
+            &root,
+        )
+    };
+
+    fs::create_dir_all(shadow.parent().unwrap()).unwrap();
+
+    assert_eq!(render_into_root().as_deref(), Some("x/b.md"));
+
+    fs::write(&shadow, "").unwrap();
+
+    let shadowed = render_into_root();
+
+    fs::remove_dir_all(&root).unwrap();
+
+    assert_eq!(shadowed, None);
+}
+
+#[test]
+fn renders_the_base_itself_with_a_trailing_separator() {
+    let style = PathStyle {
+        trailing_separator: true,
+        ..create_plain_style()
+    };
+
+    assert_eq!(
+        render_file_relative(&["work", "notes"], style).as_deref(),
+        Some("./")
+    );
+}
+
+#[test]
+fn renders_percent_encoding_in_the_recorded_hex_case() {
+    let style = PathStyle {
+        percent_encoded: true,
+        lowercase_hex: true,
+        ..create_plain_style()
+    };
+
+    assert_eq!(
+        render_file_relative(&["work", "notes", "é.md"], style).as_deref(),
+        Some("%c3%a9.md")
+    );
+}
+
+#[test]
+fn encodes_a_leading_tilde() {
+    let style = PathStyle {
+        percent_encoded: true,
+        ..create_plain_style()
+    };
+
+    assert_eq!(
+        render_file_relative(&["work", "notes", "~old", "a.md"], style).as_deref(),
+        Some("%7Eold/a.md")
+    );
+}
+
+#[cfg(not(windows))]
+#[test]
+fn renders_a_posix_file_url_in_its_written_scheme_case() {
+    let style = PathStyle {
+        file_scheme: true,
+        scheme: "FILE".to_string(),
+        ..create_plain_style()
+    };
+
+    assert_eq!(
+        render(
+            &["x", "a.md"],
+            PathForm::Absolute(AbsoluteStyle::Posix),
+            style
+        )
+        .as_deref(),
+        Some("FILE:///x/a.md")
     );
 }
