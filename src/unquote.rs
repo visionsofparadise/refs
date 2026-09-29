@@ -1,24 +1,23 @@
-pub fn unquote_shell(text: &str) -> Option<(String, &str)> {
-    let bytes = text.as_bytes();
+pub fn unquote_shell(text: &[u8]) -> Option<(String, &[u8])> {
     let mut word: Vec<u8> = Vec::new();
     let mut index = 0;
 
-    while index < bytes.len() {
-        match bytes[index] {
+    while index < text.len() {
+        match text[index] {
             b'\'' => {
-                let length = text[index + 1..].find('\'')?;
+                let length = text[index + 1..].iter().position(|byte| *byte == b'\'')?;
 
-                word.extend_from_slice(&bytes[index + 1..index + 1 + length]);
+                word.extend_from_slice(&text[index + 1..index + 1 + length]);
 
                 index += length + 2;
             }
-            b'$' if bytes.get(index + 1) == Some(&b'\'') => {
-                index = decode_escaped(bytes, index + 2, b'\'', &mut word)?;
+            b'$' if text.get(index + 1) == Some(&b'\'') => {
+                index = decode_escaped(text, index + 2, b'\'', &mut word)?;
             }
             b'"' => {
-                index = decode_double_quoted(bytes, index + 1, &mut word)?;
+                index = decode_double_quoted(text, index + 1, &mut word)?;
             }
-            b'\\' if bytes.get(index + 1) == Some(&b'\'') => {
+            b'\\' if text.get(index + 1) == Some(&b'\'') => {
                 word.push(b'\'');
 
                 index += 2;

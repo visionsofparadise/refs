@@ -1,6 +1,6 @@
 use super::*;
 
-fn directory() -> PathBuf {
+fn root_of() -> PathBuf {
     if cfg!(windows) {
         PathBuf::from("C:\\wd")
     } else {
@@ -8,12 +8,12 @@ fn directory() -> PathBuf {
     }
 }
 
-fn under(path: &str) -> PathBuf {
+fn path_of(path: &str) -> PathBuf {
     path.split('/')
-        .fold(directory(), |joined, name| joined.join(name))
+        .fold(root_of(), |joined, name| joined.join(name))
 }
 
-fn elsewhere(path: &str) -> PathBuf {
+fn foreign_path_of(path: &str) -> PathBuf {
     let rest = path.strip_prefix("/d").unwrap();
 
     if cfg!(windows) {
@@ -27,7 +27,7 @@ fn parse_with(
     input: &[u8],
     is_directory: &dyn Fn(&Path) -> bool,
 ) -> (Vec<Declaration>, Vec<Rejected>) {
-    parse_declarations(input, &directory(), is_directory, is_directory)
+    parse_declarations(input, &root_of(), is_directory, is_directory)
 }
 
 fn parse(input: &str) -> (Vec<Declaration>, Vec<Rejected>) {
@@ -54,13 +54,20 @@ fn deletes_of(declarations: &[Declaration]) -> Vec<PathBuf> {
         .collect()
 }
 
+fn reasons_of(rejected: &[Rejected]) -> Vec<(usize, &str)> {
+    rejected
+        .iter()
+        .map(|entry| (entry.origin.line, entry.reason.as_str()))
+        .collect()
+}
+
 fn assert_move(input: &str, from: &str, to: &str) {
     let (declarations, rejected) = parse(input);
 
     assert!(rejected.is_empty(), "{input}: {rejected:?}");
     assert_eq!(
         moves_of(&declarations),
-        vec![(under(from), under(to))],
+        vec![(path_of(from), path_of(to))],
         "{input}"
     );
     assert!(deletes_of(&declarations).is_empty(), "{input}");
@@ -70,15 +77,16 @@ fn assert_delete(input: &str, path: &str) {
     let (declarations, rejected) = parse(input);
 
     assert!(rejected.is_empty(), "{input}: {rejected:?}");
-    assert_eq!(deletes_of(&declarations), vec![under(path)], "{input}");
+    assert_eq!(deletes_of(&declarations), vec![path_of(path)], "{input}");
     assert!(moves_of(&declarations).is_empty(), "{input}");
 }
 
-fn reasons_of(rejected: &[Rejected]) -> Vec<(usize, &str)> {
-    rejected
-        .iter()
-        .map(|entry| (entry.origin.line, entry.reason.as_str()))
-        .collect()
+fn assert_rejected(input: &str, reason: &str) {
+    let (declarations, rejected) = parse(input);
+
+    assert!(declarations.is_empty(), "{input}: {declarations:?}");
+    assert_eq!(rejected.len(), 1, "{input}");
+    assert_eq!(rejected[0].reason, reason, "{input}");
 }
 
 #[test]
@@ -92,19 +100,27 @@ fn parses_git_name_status_moves_and_deletes() {
 }
 
 #[test]
-fn decodes_c_quoted_git_paths() {
+fn decodes_c_quoted_paths_only_in_the_git_tab_form() {
     assert_move(
         "R100\t\"a b.md\"\t\"c\\303\\251.md\"",
         "a b.md",
         "c\u{e9}.md",
     );
-    assert_move("R \"a b.md\" c.md", "a b.md", "c.md");
-    assert_delete("D \"a\\\"b\"", "a\"b");
+    assert_delete("D\t\"a\\\"b\"", "a\"b");
+    assert_rejected("R \"a b.md\" c.md", "unrecognized");
+    assert_rejected("R \"my docs\\a.md\" \"my docs\\b.md\"", "unrecognized");
 }
 
 #[test]
-fn ignores_added_modified_typed_and_copied_entries() {
-    let (declarations, rejected) = parse("A\ta\nM\tb\nT\tc\nC100\td\te\nM b\n");
+fn splits_the_hand_written_space_form_raw() {
+    assert_move("R a'b'c.md d.md", "a'b'c.md", "d.md");
+    assert_move("R notes\\new.md x.md", "notes/new.md", "x.md");
+    assert_move("R src\\a.md src\\b.md", "src/a.md", "src/b.md");
+}
+
+#[test]
+fn ignores_added_modified_typed_unmerged_and_copied_entries() {
+    let (declarations, rejected) = parse("A\ta\nM\tb\nT\tc\nU\tu\nC100\td\te\nM b\nU u\n");
 
     assert!(declarations.is_empty());
     assert!(rejected.is_empty());
@@ -131,24 +147,24 @@ fn parses_the_captured_git_name_status_output() {
     assert_eq!(
         moves_of(&declarations),
         vec![
-            (under("a b.md"), under("a c.md")),
-            (under("caf\u{e9}.md"), under("cafe2.md")),
-            (under("dir/k.md"), under("d3/dir2/k.md")),
-            (under("-dash.md"), under("dash.md")),
-            (under("it's.md"), under("its2.md")),
-            (under("nl\nx.md"), under("nl2.md")),
-            (under("q\"x.md"), under("q2.md")),
-            (under("sub/in.md"), under("sub/in2.md")),
-            (under("x to y.md"), under("x to z.md")),
+            (path_of("a b.md"), path_of("a c.md")),
+            (path_of("caf\u{e9}.md"), path_of("cafe2.md")),
+            (path_of("dir/k.md"), path_of("d3/dir2/k.md")),
+            (path_of("-dash.md"), path_of("dash.md")),
+            (path_of("it's.md"), path_of("its2.md")),
+            (path_of("nl\nx.md"), path_of("nl2.md")),
+            (path_of("q\"x.md"), path_of("q2.md")),
+            (path_of("sub/in.md"), path_of("sub/in2.md")),
+            (path_of("x to y.md"), path_of("x to z.md")),
         ]
     );
     assert_eq!(
         deletes_of(&declarations),
         vec![
-            under("back/slash.md"),
-            under("gone b.md"),
-            under("gone's.md"),
-            under("tab\tx.md"),
+            path_of("back/slash.md"),
+            path_of("gone b.md"),
+            path_of("gone's.md"),
+            path_of("tab\tx.md"),
         ]
     );
 }
@@ -162,63 +178,97 @@ fn parses_the_captured_nul_separated_records() {
     assert_eq!(
         moves_of(&declarations),
         vec![
-            (under("a b.md"), under("a c.md")),
-            (under("caf\u{e9}.md"), under("cafe2.md")),
-            (under("nl\nx.md"), under("nl2.md")),
-            (under("x to y.md"), under("x to z.md")),
+            (path_of("a b.md"), path_of("a c.md")),
+            (path_of("caf\u{e9}.md"), path_of("cafe2.md")),
+            (path_of("nl\nx.md"), path_of("nl2.md")),
+            (path_of("x to y.md"), path_of("x to z.md")),
         ]
     );
-    assert_eq!(deletes_of(&declarations), vec![under("gone.md")]);
+    assert_eq!(deletes_of(&declarations), vec![path_of("gone.md")]);
     assert_eq!(
         declarations[2],
         Declaration::Delete {
-            path: under("gone.md"),
+            path: path_of("gone.md"),
             origin: Origin {
                 line: 3,
-                text: "D\tgone.md".to_string()
+                text: "D\\tgone.md".to_string()
             },
         }
     );
 }
 
 #[test]
-fn rejects_an_unmerged_record_and_keeps_parsing() {
-    let (declarations, rejected) =
-        parse_with(b"U\0conflict.md\0R100\0a.md\0b.md\0D\0c.md\0", &|_| false);
+fn parses_one_nul_stream_holding_every_status() {
+    let (declarations, rejected) = parse_with(
+        b"R100\0a.md\0b.md\0D\0c.md\0M\0m.md\0C075\0x.md\0y.md\0A\0n.md\0T\0t.md\0U\0u.md\0",
+        &|_| false,
+    );
 
+    assert!(rejected.is_empty(), "{rejected:?}");
     assert_eq!(
         moves_of(&declarations),
-        vec![(under("a.md"), under("b.md"))]
+        vec![(path_of("a.md"), path_of("b.md"))]
     );
-    assert_eq!(deletes_of(&declarations), vec![under("c.md")]);
-    assert_eq!(reasons_of(&rejected), vec![(1, "unrecognized")]);
-    assert_eq!(rejected[0].origin.text, "U\tconflict.md");
+    assert_eq!(deletes_of(&declarations), vec![path_of("c.md")]);
 }
 
 #[test]
-fn rejects_a_truncated_record_and_ignores_a_trailing_newline() {
+fn rejects_an_unknown_status_record_and_keeps_parsing() {
+    let (declarations, rejected) =
+        parse_with(b"X\0conflict.md\0R100\0a.md\0b.md\0D\0c.md\0", &|_| false);
+
+    assert_eq!(
+        moves_of(&declarations),
+        vec![(path_of("a.md"), path_of("b.md"))]
+    );
+    assert_eq!(deletes_of(&declarations), vec![path_of("c.md")]);
+    assert_eq!(reasons_of(&rejected), vec![(1, "unrecognized")]);
+    assert_eq!(rejected[0].origin.text, "X\\tconflict.md");
+}
+
+#[test]
+fn keeps_nul_record_path_bytes_exactly() {
+    let (declarations, _) = parse_with(b"D\0nl\n\0D\0a.md \0", &|_| false);
+
+    assert_eq!(
+        deletes_of(&declarations),
+        vec![path_of("nl\n"), path_of("a.md ")]
+    );
+}
+
+#[test]
+fn skips_leading_nuls_empty_trailing_records_and_a_trailing_newline() {
+    for input in [
+        &b"\0D\0a\0R\0b\0c\0"[..],
+        b"D\0a\0R\0b\0c\0\0\0",
+        b"D\0a\0R\0b\0c\0\n",
+    ] {
+        let (declarations, rejected) = parse_with(input, &|_| false);
+
+        assert!(rejected.is_empty(), "{input:?}: {rejected:?}");
+        assert_eq!(deletes_of(&declarations), vec![path_of("a")], "{input:?}");
+        assert_eq!(
+            moves_of(&declarations),
+            vec![(path_of("b"), path_of("c"))],
+            "{input:?}"
+        );
+    }
+}
+
+#[test]
+fn rejects_an_empty_nul_record_path_and_continues() {
+    let (declarations, rejected) = parse_with(b"D\0\0R\0a\0b\0", &|_| false);
+
+    assert_eq!(reasons_of(&rejected), vec![(1, "empty path")]);
+    assert_eq!(moves_of(&declarations), vec![(path_of("a"), path_of("b"))]);
+}
+
+#[test]
+fn rejects_a_truncated_record() {
     let (declarations, rejected) = parse_with(b"R\0a\0", &|_| false);
 
     assert!(declarations.is_empty());
     assert_eq!(rejected.len(), 1);
-
-    let (declarations, rejected) = parse_with(b"D\0a\0\n", &|_| false);
-
-    assert!(rejected.is_empty());
-    assert_eq!(deletes_of(&declarations), vec![under("a")]);
-
-    let (declarations, rejected) = parse_with(b"D\0a\n", &|_| false);
-
-    assert!(rejected.is_empty());
-    assert_eq!(deletes_of(&declarations), vec![under("a")]);
-}
-
-#[test]
-fn skips_added_modified_and_copied_records() {
-    let (declarations, rejected) = parse_with(b"M\0kept.md\0C075\0x\0y\0A\0added.md\0", &|_| false);
-
-    assert!(declarations.is_empty());
-    assert!(rejected.is_empty());
 }
 
 #[test]
@@ -231,6 +281,51 @@ fn parses_gnu_mv_verbose() {
         "renamed 'caf'$'\\303\\251''.md' -> 'out.md'",
         "caf\u{e9}.md",
         "out.md",
+    );
+    assert_move("renamed foo.md -> bar.md", "foo.md", "bar.md");
+}
+
+#[test]
+fn decodes_git_bash_output_with_raw_lead_bytes_and_escaped_continuations() {
+    let (declarations, rejected) = parse_with(
+        b"renamed './\xe6'$'\\227''\xa5\xe6'$'\\234''\xac.md' -> './out.md'\n\
+          renamed './\xf0'$'\\237\\230\\200''.md' -> './emoji.md'\n\
+          renamed './\xd0'$'\\226\\320\\226''.md' -> './cyr.md'\n\
+          renamed './\xe2'$'\\202\\254''.md' -> './euro.md'\n\
+          removed 'r-\xe6'$'\\227''\xa5\xe6'$'\\234''\xac.md'\n",
+        &|_| false,
+    );
+
+    assert!(rejected.is_empty(), "{rejected:?}");
+    assert_eq!(
+        moves_of(&declarations),
+        vec![
+            (path_of("\u{65e5}\u{672c}.md"), path_of("out.md")),
+            (path_of("\u{1f600}.md"), path_of("emoji.md")),
+            (path_of("\u{416}\u{416}.md"), path_of("cyr.md")),
+            (path_of("\u{20ac}.md"), path_of("euro.md")),
+        ]
+    );
+    assert_eq!(
+        deletes_of(&declarations),
+        vec![path_of("r-\u{65e5}\u{672c}.md")]
+    );
+}
+
+#[test]
+fn parses_the_captured_wsl_escape_output() {
+    let (declarations, rejected) = parse(
+        "renamed ''$'\\346\\227\\245\\346\\234\\254''.md' -> 'x.md'\n\
+         renamed ''$'\\303\\251'' b.md' -> 'y b.md'\n",
+    );
+
+    assert!(rejected.is_empty(), "{rejected:?}");
+    assert_eq!(
+        moves_of(&declarations),
+        vec![
+            (path_of("\u{65e5}\u{672c}.md"), path_of("x.md")),
+            (path_of("\u{e9} b.md"), path_of("y b.md")),
+        ]
     );
 }
 
@@ -252,11 +347,17 @@ fn ignores_a_gnu_backup_tail() {
         "w3.md",
         "z.md",
     );
+    assert_delete("removed 'a.md' (backup: 'x')", "a.md");
 }
 
 #[test]
 fn parses_a_quoted_name_containing_an_arrow() {
     assert_move("renamed 'a -> b' -> 'c'", "a -> b", "c");
+    assert_move(
+        "renamed './x -> y.md' -> './m8-x -> y.md'",
+        "x -> y.md",
+        "m8-x -> y.md",
+    );
 }
 
 #[test]
@@ -278,7 +379,7 @@ fn parses_git_mv_and_rm_taking_git_paths_raw() {
 }
 
 #[test]
-fn parses_the_captured_git_mv_output() {
+fn parses_the_captured_git_mv_output_for_files_and_a_directory() {
     let input = "Renaming a b.md to a c.md\n\
                  Renaming it's.md to its2.md\n\
                  Renaming q\"x.md to q2.md\n\
@@ -289,8 +390,10 @@ fn parses_the_captured_git_mv_output() {
                  Renaming -dash.md to dash.md\n\
                  Renaming dir to dir2\n\
                  Renaming dir/k.md to dir2/k.md\n\
+                 Renaming dir/sub/s.md to dir2/sub/s.md\n\
                  Renaming dir2 to d3/dir2\n\
-                 Renaming dir2/k.md to d3/dir2/k.md\n";
+                 Renaming dir2/k.md to d3/dir2/k.md\n\
+                 Renaming dir2/sub/s.md to d3/dir2/sub/s.md\n";
     let (declarations, rejected) = parse_with(input.as_bytes(), &|_| true);
 
     assert_eq!(
@@ -300,15 +403,17 @@ fn parses_the_captured_git_mv_output() {
     assert_eq!(
         moves_of(&declarations),
         vec![
-            (under("a b.md"), under("a c.md")),
-            (under("it's.md"), under("its2.md")),
-            (under("q\"x.md"), under("q2.md")),
-            (under("caf\u{e9}.md"), under("cafe2.md")),
-            (under("-dash.md"), under("dash.md")),
-            (under("dir"), under("dir2")),
-            (under("dir/k.md"), under("dir2/k.md")),
-            (under("dir2"), under("d3/dir2")),
-            (under("dir2/k.md"), under("d3/dir2/k.md")),
+            (path_of("a b.md"), path_of("a c.md")),
+            (path_of("it's.md"), path_of("its2.md")),
+            (path_of("q\"x.md"), path_of("q2.md")),
+            (path_of("caf\u{e9}.md"), path_of("cafe2.md")),
+            (path_of("-dash.md"), path_of("dash.md")),
+            (path_of("dir"), path_of("dir2")),
+            (path_of("dir/k.md"), path_of("dir2/k.md")),
+            (path_of("dir/sub/s.md"), path_of("dir2/sub/s.md")),
+            (path_of("dir2"), path_of("d3/dir2")),
+            (path_of("dir2/k.md"), path_of("d3/dir2/k.md")),
+            (path_of("dir2/sub/s.md"), path_of("d3/dir2/sub/s.md")),
         ]
     );
 }
@@ -320,7 +425,11 @@ fn parses_the_captured_git_rm_output() {
     assert!(rejected.is_empty());
     assert_eq!(
         deletes_of(&declarations),
-        vec![under("gone b.md"), under("gone's.md"), under("tab\tx.md")]
+        vec![
+            path_of("gone b.md"),
+            path_of("gone's.md"),
+            path_of("tab\tx.md")
+        ]
     );
 }
 
@@ -333,14 +442,13 @@ fn parses_bsd_mv_verbose_splitting_raw() {
 }
 
 #[test]
-fn splits_the_plain_space_form_raw() {
-    assert_move("R a'b'c.md d.md", "a'b'c.md", "d.md");
-    assert_move("R src\\a.md src\\b.md", "src/a.md", "src/b.md");
-}
-
-#[test]
 fn rejects_ambiguous_lines() {
-    for line in ["a -> b -> c", "Renaming a to b to c", "renamed a -> b -> c"] {
+    for line in [
+        "a -> b -> c",
+        "Renaming a to b to c",
+        "renamed a -> b -> c",
+        "'a' -> 'b' -> 'c'",
+    ] {
         let (declarations, rejected) = parse(line);
 
         assert!(declarations.is_empty(), "{line}");
@@ -357,13 +465,22 @@ fn rejects_ambiguous_lines() {
 }
 
 #[test]
-fn rejects_unrecognized_lines_and_keeps_going() {
-    let (declarations, rejected) = parse("hello world\n\nD a\ncopied 'a' 'b'\n");
+fn rejects_the_captured_malformed_lines() {
+    let (declarations, rejected) = parse(
+        "R a.md b.md c.md\nD\nR\nrenamed 'a' -> 'b' extra\nhello world\n\nD a\ncopied 'a' 'b'\n",
+    );
 
-    assert_eq!(deletes_of(&declarations), vec![under("a")]);
+    assert_eq!(deletes_of(&declarations), vec![path_of("a")]);
     assert_eq!(
         reasons_of(&rejected),
-        vec![(1, "unrecognized"), (4, "unrecognized")]
+        vec![
+            (1, "unrecognized"),
+            (2, "unrecognized"),
+            (3, "unrecognized"),
+            (4, "unrecognized"),
+            (5, "unrecognized"),
+            (8, "unrecognized"),
+        ]
     );
 }
 
@@ -398,6 +515,21 @@ fn rejects_a_path_the_grammar_gives_no_candidate() {
 }
 
 #[test]
+fn rejects_an_empty_path_in_every_line_form() {
+    for line in [
+        "removed ''",
+        "removed directory ''",
+        "D \"\"",
+        "D\t\"\"",
+        "renamed '' -> 'x.md'",
+        "rm ''",
+        "R\t\ta.md",
+    ] {
+        assert_rejected(line, "empty path");
+    }
+}
+
+#[test]
 fn ignores_a_bom_trailing_whitespace_carriage_returns_and_blank_lines() {
     let (declarations, rejected) = parse_with(
         b"\xef\xbb\xbfcreated directory 'e'\r\n\r\nD a  \r\n",
@@ -408,7 +540,7 @@ fn ignores_a_bom_trailing_whitespace_carriage_returns_and_blank_lines() {
     assert_eq!(
         declarations,
         vec![Declaration::Delete {
-            path: under("a"),
+            path: path_of("a"),
             origin: Origin {
                 line: 3,
                 text: "D a".to_string()
@@ -418,7 +550,24 @@ fn ignores_a_bom_trailing_whitespace_carriage_returns_and_blank_lines() {
 }
 
 #[test]
-fn completes_a_cross_filesystem_copy_at_its_copied_line() {
+fn escapes_control_characters_in_an_origin_text() {
+    let (_, rejected) = parse("rm 'tab\tx'\nD\ta\tb\tc\nbell\u{7} -> \n");
+
+    assert_eq!(
+        rejected
+            .iter()
+            .map(|entry| entry.origin.text.as_str())
+            .collect::<Vec<_>>(),
+        vec!["D\\ta\\tb\\tc", "bell\\x07 ->"]
+    );
+
+    let (_, rejected) = parse_with(b"X\0nl\nx\0", &|_| false);
+
+    assert_eq!(rejected[0].origin.text, "X\\tnl\\nx");
+}
+
+#[test]
+fn completes_a_cross_filesystem_file_move_at_its_copied_line() {
     let (declarations, rejected) = parse("copied 'a' -> 'b'\nD c\nremoved 'a'\n");
 
     assert!(rejected.is_empty());
@@ -426,15 +575,15 @@ fn completes_a_cross_filesystem_copy_at_its_copied_line() {
         declarations,
         vec![
             Declaration::Move {
-                from: under("a"),
-                to: under("b"),
+                from: path_of("a"),
+                to: path_of("b"),
                 origin: Origin {
                     line: 1,
                     text: "copied 'a' -> 'b'".to_string()
                 },
             },
             Declaration::Delete {
-                path: under("c"),
+                path: path_of("c"),
                 origin: Origin {
                     line: 2,
                     text: "D c".to_string()
@@ -445,44 +594,19 @@ fn completes_a_cross_filesystem_copy_at_its_copied_line() {
 }
 
 #[test]
-fn completes_a_cross_filesystem_directory_move_per_file() {
-    let (declarations, rejected) = parse(
-        "created directory 'e'\n\
-         copied 'd/a.md' -> 'e/a.md'\n\
-         copied 'd/b.md' -> 'e/b.md'\n\
-         removed 'd/a.md'\n\
-         removed 'd/b.md'\n\
-         removed directory 'd'\n",
-    );
+fn reads_bare_word_gnu_copies_and_drops_a_copy_never_removed() {
+    let (declarations, rejected) =
+        parse("renamed foo.md -> bar.md\ncopied x.md -> y.md\nremoved x.md\n");
 
     assert!(rejected.is_empty());
     assert_eq!(
         moves_of(&declarations),
         vec![
-            (under("d/a.md"), under("e/a.md")),
-            (under("d/b.md"), under("e/b.md"))
+            (path_of("foo.md"), path_of("bar.md")),
+            (path_of("x.md"), path_of("y.md"))
         ]
     );
-    assert!(deletes_of(&declarations).is_empty());
-}
 
-#[test]
-fn completes_pending_copies_at_a_removed_directory() {
-    let (declarations, rejected) = parse(
-        "copied 'd/a.md' -> 'e/a.md'\n\
-         removed directory 'd'\n",
-    );
-
-    assert!(rejected.is_empty());
-    assert_eq!(
-        moves_of(&declarations),
-        vec![(under("d/a.md"), under("e/a.md"))]
-    );
-    assert!(deletes_of(&declarations).is_empty());
-}
-
-#[test]
-fn drops_a_lone_copy() {
     let (declarations, rejected) = parse("copied 'a' -> 'b'\n");
 
     assert!(declarations.is_empty());
@@ -490,72 +614,250 @@ fn drops_a_lone_copy() {
 }
 
 #[test]
-fn keeps_rm_recursive_output_as_deletes() {
-    let (declarations, _) = parse("removed 'd/a.md'\nremoved directory 'd'\n");
+fn treats_a_copy_of_one_source_to_two_destinations_as_one_move() {
+    let (declarations, _) =
+        parse("copied 'a.md' -> 'b.md'\ncopied 'a.md' -> 'c.md'\nremoved 'a.md'\n");
 
-    assert_eq!(deletes_of(&declarations), vec![under("d/a.md"), under("d")]);
+    assert_eq!(
+        moves_of(&declarations),
+        vec![(path_of("a.md"), path_of("b.md"))]
+    );
 }
 
 #[test]
-fn parses_the_captured_cross_filesystem_output_with_an_empty_directory() {
-    let input = "created directory '/d/tmp.CvyuD3uQK8/d'\n\
-                 created directory '/d/tmp.CvyuD3uQK8/d/sub'\n\
-                 copied 'd/sub/b.md' -> '/d/tmp.CvyuD3uQK8/d/sub/b.md'\n\
-                 created directory '/d/tmp.CvyuD3uQK8/d/empty'\n\
-                 copied 'd/a.md' -> '/d/tmp.CvyuD3uQK8/d/a.md'\n\
-                 copied \"d/it's.md\" -> \"/d/tmp.CvyuD3uQK8/d/it's.md\"\n\
-                 removed \"d/it's.md\"\n\
-                 removed directory 'd/empty'\n\
-                 removed 'd/sub/b.md'\n\
-                 removed directory 'd/sub'\n\
-                 removed 'd/a.md'\n\
-                 removed directory 'd'\n\
-                 copied 'x.md' -> '/d/tmp.CvyuD3uQK8/y.md'\n\
+fn maps_a_file_moved_out_of_a_directory_without_moving_its_siblings() {
+    let (declarations, rejected) = parse(
+        "copied 'docs/a.md' -> '/d/T/a.md'\n\
+         removed 'docs/a.md'\n\
+         removed directory 'docs/old'\n\
+         removed 'docs/gone.md'\n",
+    );
+
+    assert!(rejected.is_empty());
+    assert_eq!(
+        moves_of(&declarations),
+        vec![(path_of("docs/a.md"), foreign_path_of("/d/T/a.md"))]
+    );
+    assert_eq!(
+        deletes_of(&declarations),
+        vec![path_of("docs/old"), path_of("docs/gone.md")]
+    );
+}
+
+#[test]
+fn keeps_a_removal_after_a_retired_root_a_delete() {
+    let (declarations, rejected) = parse(
+        "created directory '/d/T/e'\n\
+         created directory '/d/T/e/sub'\n\
+         copied 'e/a.md' -> '/d/T/e/a.md'\n\
+         removed directory 'e/sub'\n\
+         removed 'e/a.md'\n\
+         removed directory 'e'\n\
+         removed directory 'sub'\n",
+    );
+
+    assert!(rejected.is_empty());
+    assert_eq!(
+        moves_of(&declarations),
+        vec![
+            (path_of("e"), foreign_path_of("/d/T/e")),
+            (path_of("e/sub"), foreign_path_of("/d/T/e/sub")),
+            (path_of("e/a.md"), foreign_path_of("/d/T/e/a.md")),
+        ]
+    );
+    assert_eq!(deletes_of(&declarations), vec![path_of("sub")]);
+}
+
+#[test]
+fn reads_a_directory_root_when_the_created_line_is_missing() {
+    let (declarations, rejected) = parse(
+        "copied 'e/a.md' -> '/d/T/e/a.md'\n\
+         created directory '/d/T/e/sub'\n\
+         removed 'e/a.md'\n\
+         removed directory 'e'\n\
+         removed directory 'sub'\n",
+    );
+
+    assert!(rejected.is_empty());
+    assert_eq!(
+        moves_of(&declarations),
+        vec![
+            (path_of("e/a.md"), foreign_path_of("/d/T/e/a.md")),
+            (path_of("e"), foreign_path_of("/d/T/e")),
+        ]
+    );
+    assert_eq!(deletes_of(&declarations), vec![path_of("sub")]);
+}
+
+#[test]
+fn keeps_the_parent_of_a_moved_directory_a_delete() {
+    let (declarations, rejected) = parse(
+        "created directory '/d/T/b'\n\
+         copied 'a/b/x.md' -> '/d/T/b/x.md'\n\
+         removed 'a/b/x.md'\n\
+         removed directory 'a/b'\n\
+         removed 'a/other.md'\n\
+         removed directory 'a'\n",
+    );
+
+    assert!(rejected.is_empty());
+    assert_eq!(
+        moves_of(&declarations),
+        vec![
+            (path_of("a/b"), foreign_path_of("/d/T/b")),
+            (path_of("a/b/x.md"), foreign_path_of("/d/T/b/x.md")),
+        ]
+    );
+    assert_eq!(
+        deletes_of(&declarations),
+        vec![path_of("a/other.md"), path_of("a")]
+    );
+
+    let (declarations, _) = parse(
+        "copied 'a/b/x.md' -> '/d/T/b/x.md'\n\
+         removed 'a/b/x.md'\n\
+         removed directory 'a/b'\n\
+         removed 'a/other.md'\n\
+         removed directory 'a'\n",
+    );
+
+    assert_eq!(
+        deletes_of(&declarations),
+        vec![path_of("a/b"), path_of("a/other.md"), path_of("a")]
+    );
+}
+
+#[test]
+fn keeps_rm_recursive_output_as_deletes() {
+    let (declarations, rejected) = parse(
+        "removed 'r/a.md'\n\
+         removed directory 'r/empty'\n\
+         removed 'r/sub/b.md'\n\
+         removed directory 'r/sub'\n\
+         removed directory 'r'\n",
+    );
+
+    assert!(rejected.is_empty());
+    assert!(moves_of(&declarations).is_empty());
+    assert_eq!(
+        deletes_of(&declarations),
+        vec![
+            path_of("r/a.md"),
+            path_of("r/empty"),
+            path_of("r/sub/b.md"),
+            path_of("r/sub"),
+            path_of("r"),
+        ]
+    );
+}
+
+#[test]
+fn moves_a_directory_holding_only_empty_directories() {
+    let (declarations, rejected) = parse(
+        "created directory '/d/T/oe2'\n\
+         created directory '/d/T/oe2/inner'\n\
+         removed directory 'onlyempty/inner'\n\
+         removed directory 'onlyempty'\n",
+    );
+
+    assert!(rejected.is_empty());
+    assert_eq!(
+        moves_of(&declarations),
+        vec![
+            (path_of("onlyempty"), foreign_path_of("/d/T/oe2")),
+            (
+                path_of("onlyempty/inner"),
+                foreign_path_of("/d/T/oe2/inner")
+            ),
+        ]
+    );
+    assert!(deletes_of(&declarations).is_empty());
+}
+
+#[test]
+fn moves_a_lone_empty_directory_named_by_a_created_line() {
+    let (declarations, rejected) = parse(
+        "created directory '/d/t/empty'\n\
+         removed directory 'empty'\n",
+    );
+
+    assert!(rejected.is_empty());
+    assert_eq!(
+        moves_of(&declarations),
+        vec![(path_of("empty"), foreign_path_of("/d/t/empty"))]
+    );
+}
+
+#[test]
+fn parses_the_captured_cross_filesystem_output() {
+    let input = "copied 'x.md' -> '/d/T/tmp.YkkZxcP6V4/x.md'\n\
                  removed 'x.md'\n\
-                 copied '/d/tmp.CvyuD3uQK8/y.md' -> './z.md'\n\
-                 removed '/d/tmp.CvyuD3uQK8/y.md'\n\
-                 renamed 'pkg' -> 'vendor/pkg'\n\
-                 renamed 'w.md' -> 'z.md' (backup: 'z.md~')\n\
-                 renamed 'w3.md' -> 'z.md' (backup: 'z.md.~1~')\n\
-                 renamed 'caf'$'\\303\\251''.md' -> 'out.md'\n\
-                 renamed 'caf\u{e9}.md' -> 'out2.md'\n\
-                 renamed 'q.md' -> 'q2.md'\n\
-                 removed directory 'vendor/pkg/pkg'\n\
-                 removed directory 'vendor/pkg'\n\
-                 removed directory 'vendor'\n";
-    let (declarations, rejected) = parse_with(input.as_bytes(), &|_| true);
-    let target = |path: &str| elsewhere(&format!("/d/tmp.CvyuD3uQK8{path}"));
+                 created directory '/d/T/tmp.YkkZxcP6V4/e'\n\
+                 created directory '/d/T/tmp.YkkZxcP6V4/e/sub'\n\
+                 copied 'e/sub/b.md' -> '/d/T/tmp.YkkZxcP6V4/e/sub/b.md'\n\
+                 created directory '/d/T/tmp.YkkZxcP6V4/e/empty'\n\
+                 created directory '/d/T/tmp.YkkZxcP6V4/e/emptyonly'\n\
+                 created directory '/d/T/tmp.YkkZxcP6V4/e/emptyonly/inner'\n\
+                 copied 'e/a.md' -> '/d/T/tmp.YkkZxcP6V4/e/a.md'\n\
+                 copied \"e/it's.md\" -> \"/d/T/tmp.YkkZxcP6V4/e/it's.md\"\n\
+                 removed \"e/it's.md\"\n\
+                 removed directory 'e/empty'\n\
+                 removed 'e/sub/b.md'\n\
+                 removed directory 'e/sub'\n\
+                 removed directory 'e/emptyonly/inner'\n\
+                 removed directory 'e/emptyonly'\n\
+                 removed 'e/a.md'\n\
+                 removed directory 'e'\n\
+                 created directory '/d/T/tmp.YkkZxcP6V4/renamed'\n\
+                 created directory '/d/T/tmp.YkkZxcP6V4/renamed/sub'\n\
+                 copied 'f/sub/b.md' -> '/d/T/tmp.YkkZxcP6V4/renamed/sub/b.md'\n\
+                 created directory '/d/T/tmp.YkkZxcP6V4/renamed/empty'\n\
+                 copied 'f/a.md' -> '/d/T/tmp.YkkZxcP6V4/renamed/a.md'\n\
+                 removed directory 'f/empty'\n\
+                 removed 'f/sub/b.md'\n\
+                 removed directory 'f/sub'\n\
+                 removed 'f/a.md'\n\
+                 removed directory 'f'\n\
+                 created directory '/d/T/tmp.YkkZxcP6V4/oe2'\n\
+                 created directory '/d/T/tmp.YkkZxcP6V4/oe2/inner'\n\
+                 removed directory 'onlyempty/inner'\n\
+                 removed directory 'onlyempty'\n\
+                 copied '/d/T/tmp.YkkZxcP6V4/back.md' -> './back2.md'\n\
+                 removed '/d/T/tmp.YkkZxcP6V4/back.md'\n\
+                 copied 'bb.md' -> '/d/T/tmp.YkkZxcP6V4/bb.md' (backup: '/d/T/tmp.YkkZxcP6V4/bb.md~')\n\
+                 removed 'bb.md'\n";
+    let (declarations, rejected) = parse_with(input.as_bytes(), &|_| false);
+    let target = |path: &str| foreign_path_of(&format!("/d/T/tmp.YkkZxcP6V4{path}"));
 
     assert!(rejected.is_empty(), "{rejected:?}");
     assert_eq!(
         moves_of(&declarations),
         vec![
-            (under("d/sub/b.md"), target("/d/sub/b.md")),
-            (under("d/a.md"), target("/d/a.md")),
-            (under("d/it's.md"), target("/d/it's.md")),
-            (under("d/empty"), target("/d/empty")),
-            (under("x.md"), target("/y.md")),
-            (target("/y.md"), under("z.md")),
-            (under("pkg"), under("vendor/pkg")),
-            (under("w.md"), under("z.md")),
-            (under("w3.md"), under("z.md")),
-            (under("caf\u{e9}.md"), under("out.md")),
-            (under("caf\u{e9}.md"), under("out2.md")),
-            (under("q.md"), under("q2.md")),
+            (path_of("x.md"), target("/x.md")),
+            (path_of("e"), target("/e")),
+            (path_of("e/sub"), target("/e/sub")),
+            (path_of("e/sub/b.md"), target("/e/sub/b.md")),
+            (path_of("e/empty"), target("/e/empty")),
+            (path_of("e/emptyonly"), target("/e/emptyonly")),
+            (path_of("e/emptyonly/inner"), target("/e/emptyonly/inner")),
+            (path_of("e/a.md"), target("/e/a.md")),
+            (path_of("e/it's.md"), target("/e/it's.md")),
+            (path_of("f"), target("/renamed")),
+            (path_of("f/sub"), target("/renamed/sub")),
+            (path_of("f/sub/b.md"), target("/renamed/sub/b.md")),
+            (path_of("f/empty"), target("/renamed/empty")),
+            (path_of("f/a.md"), target("/renamed/a.md")),
+            (path_of("onlyempty"), target("/oe2")),
+            (path_of("onlyempty/inner"), target("/oe2/inner")),
+            (target("/back.md"), path_of("back2.md")),
+            (path_of("bb.md"), target("/bb.md")),
         ]
     );
-    assert_eq!(
-        deletes_of(&declarations),
-        vec![
-            under("vendor/pkg/pkg"),
-            under("vendor/pkg"),
-            under("vendor")
-        ]
-    );
+    assert!(deletes_of(&declarations).is_empty());
 }
 
 #[test]
-fn parses_the_captured_cross_filesystem_output_of_git_bash() {
+fn moves_every_removal_beneath_a_copied_root_in_the_git_bash_capture() {
     let input = "copied 'x.md' -> '/d/refs-review-23961/x.md'\n\
                  removed 'x.md'\n\
                  created directory '/d/refs-review-23961/d'\n\
@@ -567,45 +869,45 @@ fn parses_the_captured_cross_filesystem_output_of_git_bash() {
                  removed directory 'd/sub'\n\
                  removed directory 'd'\n";
     let (declarations, rejected) = parse(input);
-    let target = |path: &str| elsewhere(&format!("/d/refs-review-23961{path}"));
+    let target = |path: &str| foreign_path_of(&format!("/d/refs-review-23961{path}"));
 
     assert!(rejected.is_empty(), "{rejected:?}");
     assert_eq!(
         moves_of(&declarations),
         vec![
-            (under("x.md"), target("/x.md")),
-            (under("d/sub/b.md"), target("/d/sub/b.md")),
-            (under("d/a.md"), target("/d/a.md")),
+            (path_of("x.md"), target("/x.md")),
+            (path_of("d"), target("/d")),
+            (path_of("d/sub"), target("/d/sub")),
+            (path_of("d/sub/b.md"), target("/d/sub/b.md")),
+            (path_of("d/a.md"), target("/d/a.md")),
         ]
     );
     assert!(deletes_of(&declarations).is_empty());
 }
 
 #[test]
-fn drops_a_removed_directory_beneath_a_copied_root_with_no_created_line() {
+fn rejects_a_removal_whose_copy_was_rejected_and_never_deletes_it() {
     let (declarations, rejected) = parse(
-        "copied 'd/a.md' -> '/d/t/d/a.md'\n\
-         removed 'd/a.md'\n\
-         removed directory 'd/empty'\n",
+        "created directory 'x:y'\n\
+         copied 'a.md' -> 'x:y.md'\n\
+         removed 'a.md'\n\
+         removed 'b.md'\n",
     );
 
-    assert!(rejected.is_empty());
-    assert_eq!(moves_of(&declarations).len(), 1);
-    assert!(deletes_of(&declarations).is_empty());
+    assert_eq!(
+        reasons_of(&rejected),
+        vec![(2, "unsupported path"), (3, "unsupported path")]
+    );
+    assert_eq!(deletes_of(&declarations), vec![path_of("b.md")]);
+    assert!(moves_of(&declarations).is_empty());
 }
 
 #[test]
-fn moves_an_empty_top_level_directory_named_by_a_created_line() {
-    let (declarations, rejected) = parse(
-        "created directory '/d/t/empty'\n\
-         removed directory 'empty'\n",
-    );
+fn never_rejects_a_created_directory_line() {
+    let (declarations, rejected) = parse("created directory ''\ncreated directory 'x:y'\n");
 
+    assert!(declarations.is_empty());
     assert!(rejected.is_empty());
-    assert_eq!(
-        moves_of(&declarations),
-        vec![(under("empty"), elsewhere("/d/t/empty"))]
-    );
 }
 
 #[test]
@@ -613,9 +915,9 @@ fn moves_into_an_existing_directory_only_for_the_plain_space_form() {
     let parse_tree = |input: &[u8]| {
         parse_declarations(
             input,
-            &directory(),
-            &|path: &Path| path == under("docs"),
-            &|path: &Path| path == under("docs") || path == under("docs/a.md"),
+            &root_of(),
+            &|path: &Path| path == path_of("docs"),
+            &|path: &Path| path == path_of("docs") || path == path_of("docs/a.md"),
         )
     };
 
@@ -623,14 +925,14 @@ fn moves_into_an_existing_directory_only_for_the_plain_space_form() {
 
     assert_eq!(
         moves_of(&declarations),
-        vec![(under("a.md"), under("docs/a.md"))]
+        vec![(path_of("a.md"), path_of("docs/a.md"))]
     );
 
     let (declarations, _) = parse_tree(b"R a.md notes\n");
 
     assert_eq!(
         moves_of(&declarations),
-        vec![(under("a.md"), under("notes"))]
+        vec![(path_of("a.md"), path_of("notes"))]
     );
 
     for line in [
@@ -644,7 +946,7 @@ fn moves_into_an_existing_directory_only_for_the_plain_space_form() {
 
         assert_eq!(
             moves_of(&declarations),
-            vec![(under("a.md"), under("docs"))],
+            vec![(path_of("a.md"), path_of("docs"))],
             "{line}"
         );
     }
@@ -653,7 +955,22 @@ fn moves_into_an_existing_directory_only_for_the_plain_space_form() {
 
     assert_eq!(
         moves_of(&declarations),
-        vec![(under("a.md"), under("docs"))]
+        vec![(path_of("a.md"), path_of("docs"))]
+    );
+}
+
+#[test]
+fn keeps_a_directory_rename_onto_an_existing_directory_without_the_entry() {
+    let (declarations, _) = parse_declarations(
+        b"R d1 docs\n",
+        &root_of(),
+        &|path: &Path| path == path_of("docs"),
+        &|path: &Path| path == path_of("docs"),
+    );
+
+    assert_eq!(
+        moves_of(&declarations),
+        vec![(path_of("d1"), path_of("docs"))]
     );
 }
 
@@ -663,14 +980,14 @@ fn keeps_a_directory_rename_whose_destination_shares_a_name() {
 
     assert_eq!(
         moves_of(&declarations),
-        vec![(under("pkg"), under("vendor/pkg"))]
+        vec![(path_of("pkg"), path_of("vendor/pkg"))]
     );
 
     let (declarations, _) = parse_with(b"Renaming src/lib to lib\n", &|_| true);
 
     assert_eq!(
         moves_of(&declarations),
-        vec![(under("src/lib"), under("lib"))]
+        vec![(path_of("src/lib"), path_of("lib"))]
     );
 }
 
@@ -701,16 +1018,4 @@ fn reads_absolute_declaration_paths() {
 #[test]
 fn normalizes_declaration_paths() {
     assert_move("R a/../b/./c.md d.md", "b/c.md", "d.md");
-}
-
-#[test]
-fn keeps_a_directory_rename_onto_an_existing_directory_without_the_entry() {
-    let (declarations, _) = parse_declarations(
-        b"R d1 docs\n",
-        &directory(),
-        &|path: &Path| path == under("docs"),
-        &|path: &Path| path == under("docs"),
-    );
-
-    assert_eq!(moves_of(&declarations), vec![(under("d1"), under("docs"))]);
 }

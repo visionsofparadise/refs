@@ -1,88 +1,83 @@
 use super::*;
 
+fn shell(text: &str) -> Option<(String, &str)> {
+    unquote_shell(text.as_bytes()).map(|(word, rest)| (word, std::str::from_utf8(rest).unwrap()))
+}
+
 #[test]
 fn reads_a_single_quoted_word_and_the_rest() {
-    assert_eq!(
-        unquote_shell("'a b' -> 'c'"),
-        Some(("a b".to_string(), " -> 'c'"))
-    );
+    assert_eq!(shell("'a b' -> 'c'"), Some(("a b".to_string(), " -> 'c'")));
 }
 
 #[test]
 fn reads_a_bare_word_up_to_whitespace() {
-    assert_eq!(
-        unquote_shell("a/b.md rest"),
-        Some(("a/b.md".to_string(), " rest"))
-    );
+    assert_eq!(shell("a/b.md rest"), Some(("a/b.md".to_string(), " rest")));
 }
 
 #[test]
 fn joins_an_escaped_quote_between_quoted_segments() {
-    assert_eq!(unquote_shell("'it'\\''s'"), Some(("it's".to_string(), "")));
+    assert_eq!(shell("'it'\\''s'"), Some(("it's".to_string(), "")));
 }
 
 #[test]
 fn reads_the_double_quoted_form_gnu_uses_for_a_name_with_a_quote() {
     assert_eq!(
-        unquote_shell("\"it's.md\" -> x"),
+        shell("\"it's.md\" -> x"),
         Some(("it's.md".to_string(), " -> x"))
     );
     assert_eq!(
-        unquote_shell("\"a\\\"b\\\\c\\$d\\q\""),
+        shell("\"a\\\"b\\\\c\\$d\\q\""),
         Some(("a\"b\\c$d\\q".to_string(), ""))
     );
-    assert_eq!(unquote_shell("\"abc"), None);
+    assert_eq!(shell("\"abc"), None);
 }
 
 #[test]
 fn keeps_a_bare_backslash_as_written() {
     assert_eq!(
-        unquote_shell("src\\a.md -> x"),
+        shell("src\\a.md -> x"),
         Some(("src\\a.md".to_string(), " -> x"))
     );
 }
 
 #[test]
 fn joins_adjacent_quoted_and_bare_segments() {
-    assert_eq!(unquote_shell("'a'b'c d'"), Some(("abc d".to_string(), "")));
+    assert_eq!(shell("'a'b'c d'"), Some(("abc d".to_string(), "")));
 }
 
 #[test]
 fn decodes_ansi_c_escapes() {
     assert_eq!(
-        unquote_shell("$'x\\ny\\t\\\\\\'z'"),
+        shell("$'x\\ny\\t\\\\\\'z'"),
         Some(("x\ny\t\\'z".to_string(), ""))
     );
 }
 
 #[test]
 fn decodes_ansi_c_octal_bytes_as_utf8() {
-    assert_eq!(
-        unquote_shell("$'\\303\\251'"),
-        Some(("\u{e9}".to_string(), ""))
-    );
-    assert_eq!(unquote_shell("$'\\101B'"), Some(("AB".to_string(), "")));
+    assert_eq!(shell("$'\\303\\251'"), Some(("\u{e9}".to_string(), "")));
+    assert_eq!(shell("$'\\101B'"), Some(("AB".to_string(), "")));
 }
 
 #[test]
 fn keeps_a_dollar_that_opens_no_quote() {
-    assert_eq!(unquote_shell("a$b"), Some(("a$b".to_string(), "")));
+    assert_eq!(shell("a$b"), Some(("a$b".to_string(), "")));
 }
 
 #[test]
 fn reads_an_empty_quoted_word() {
-    assert_eq!(unquote_shell("'' x"), Some((String::new(), " x")));
+    assert_eq!(shell("'' x"), Some((String::new(), " x")));
 }
 
 #[test]
 fn rejects_unterminated_and_empty_input() {
-    assert_eq!(unquote_shell("'abc"), None);
-    assert_eq!(unquote_shell("$'abc"), None);
-    assert_eq!(unquote_shell(""), None);
-    assert_eq!(unquote_shell(" a"), None);
-    assert_eq!(unquote_shell("$'\\q'"), None);
-    assert_eq!(unquote_shell("$'\\400'"), None);
-    assert_eq!(unquote_shell("$'\\377'"), None);
+    assert_eq!(shell("'abc"), None);
+    assert_eq!(shell("$'abc"), None);
+    assert_eq!(shell(""), None);
+    assert_eq!(shell(" a"), None);
+    assert_eq!(shell("$'\\q'"), None);
+    assert_eq!(shell("$'\\400'"), None);
+    assert_eq!(shell("$'\\377'"), None);
 }
 
 #[test]
@@ -112,4 +107,21 @@ fn rejects_a_malformed_git_quote() {
     assert_eq!(unquote_git("\"abc\"d"), None);
     assert_eq!(unquote_git("\"\\303\""), None);
     assert_eq!(unquote_git("\"\\q\""), None);
+}
+
+#[test]
+fn decodes_a_raw_lead_byte_followed_by_escaped_continuation_bytes() {
+    let word = b"'./\xe6'$'\\227''\xa5\xe6'$'\\234''\xac.md' -> x";
+
+    assert_eq!(
+        unquote_shell(word),
+        Some(("./\u{65e5}\u{672c}.md".to_string(), &b" -> x"[..]))
+    );
+
+    let emoji = b"'\xf0'$'\\237\\230\\200''.md'";
+
+    assert_eq!(
+        unquote_shell(emoji),
+        Some(("\u{1f600}.md".to_string(), &b""[..]))
+    );
 }

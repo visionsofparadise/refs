@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 use crate::resolve_reference::{is_beneath, key_of, locate_path};
@@ -43,6 +44,11 @@ enum Parsed {
     RemovedDirectory(String),
 }
 
+struct Entry {
+    origin: Origin,
+    parsed: Result<Parsed, &'static str>,
+}
+
 struct PendingCopy {
     from: PathBuf,
     to: PathBuf,
@@ -50,48 +56,55 @@ struct PendingCopy {
     origin: Origin,
 }
 
+struct Created {
+    path: PathBuf,
+    slot: usize,
+}
+
+struct Mapping {
+    from_root: PathBuf,
+    to_root: PathBuf,
+    is_directory: bool,
+    retired: bool,
+}
+
 const UNRECOGNIZED: &str = "unrecognized";
 const AMBIGUOUS: &str = "ambiguous";
 const UNSUPPORTED_PATH: &str = "unsupported path";
+const EMPTY_PATH: &str = "empty path";
 const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
 
 fn resolve_path(text: &str, working_directory: &Path) -> Result<PathBuf, &'static str> {
+    if text.is_empty() {
+        return Err(EMPTY_PATH);
+    }
+
     locate_path(text, working_directory).ok_or(UNSUPPORTED_PATH)
 }
 
-fn split_fields(line: &str) -> Vec<&str> {
-    if line.contains('\t') {
-        return line.split('\t').collect();
-    }
+fn escape_text(text: &str) -> String {
+    let mut escaped = String::new();
 
-    let mut fields = Vec::new();
-    let mut rest = line.trim_start_matches(' ');
-
-    while !rest.is_empty() {
-        let bytes = rest.as_bytes();
-        let mut end = 0;
-        let mut quoted = false;
-
-        while end < bytes.len() {
-            match bytes[end] {
-                b'\\' if quoted && bytes.get(end + 1).is_some_and(u8::is_ascii) => end += 2,
-                b'"' => {
-                    quoted = !quoted;
-                    end += 1;
-                }
-                b' ' if !quoted => break,
-                _ => end += 1,
+    for character in text.chars() {
+        match character {
+            '\n' => escaped.push_str("\\n"),
+            '\t' => escaped.push_str("\\t"),
+            '\r' => escaped.push_str("\\r"),
+            control if control.is_control() => {
+                escaped.push_str(&format!("\\x{:02x}", u32::from(control)));
             }
+            other => escaped.push(other),
         }
-
-        let end = end.min(bytes.len());
-
-        fields.push(&rest[..end]);
-
-        rest = rest[end..].trim_start_matches(' ');
     }
 
-    fields
+    escaped
+}
+
+fn origin_of(line: usize, text: &str) -> Origin {
+    Origin {
+        line,
+        text: escape_text(text),
+    }
 }
 
 fn is_status(field: &str, letters: &str) -> bool {
@@ -103,8 +116,13 @@ fn is_status(field: &str, letters: &str) -> bool {
         && characters.all(|character| character.is_ascii_digit())
 }
 
-fn parse_name_status(line: &str) -> Option<Result<Parsed, &'static str>> {
-    let fields = split_fields(line);
+fn parse_name_status(text: &str) -> Option<Result<Parsed, &'static str>> {
+    let tabbed = text.contains('\t');
+    let fields: Vec<&str> = if tabbed {
+        text.split('\t').collect()
+    } else {
+        text.split(' ').filter(|field| !field.is_empty()).collect()
+    };
     let status = *fields.first()?;
 
     if fields.get(1) == Some(&"->") {
@@ -113,7 +131,7 @@ fn parse_name_status(line: &str) -> Option<Result<Parsed, &'static str>> {
 
     let expected = if is_status(status, "RC") {
         3
-    } else if is_status(status, "DAMT") {
+    } else if is_status(status, "DAMTU") {
         2
     } else {
         return None;
@@ -126,9 +144,15 @@ fn parse_name_status(line: &str) -> Option<Result<Parsed, &'static str>> {
     let mut paths = Vec::new();
 
     for field in &fields[1..] {
-        match unquote_git(field) {
-            Some(path) => paths.push(path),
-            None => return Some(Err(UNRECOGNIZED)),
+        if tabbed {
+            match unquote_git(field) {
+                Some(path) => paths.push(path),
+                None => return Some(Err(UNRECOGNIZED)),
+            }
+        } else if *field == "\"\"" {
+            paths.push(String::new());
+        } else {
+            paths.push((*field).to_string());
         }
     }
 
@@ -136,26 +160,39 @@ fn parse_name_status(line: &str) -> Option<Result<Parsed, &'static str>> {
         ('R', [from, to]) => Parsed::Move {
             from: from.clone(),
             to: to.clone(),
-            hand_written: !line.contains('\t'),
+            hand_written: !tabbed,
         },
         ('D', [path]) => Parsed::Delete(path.clone()),
         _ => Parsed::Skip,
     }))
 }
 
-fn parse_gnu_move(line: &str) -> Option<Parsed> {
-    let (copied, rest) = if let Some(rest) = line.strip_prefix("copied ") {
+fn find_bytes(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+    haystack
+        .windows(needle.len())
+        .position(|window| window == needle)
+}
+
+fn count_bytes(haystack: &[u8], needle: &[u8]) -> usize {
+    haystack
+        .windows(needle.len())
+        .filter(|window| *window == needle)
+        .count()
+}
+
+fn parse_gnu_move(line: &[u8]) -> Option<Parsed> {
+    let (copied, rest) = if let Some(rest) = line.strip_prefix(b"copied ") {
         (true, rest)
-    } else if let Some(rest) = line.strip_prefix("renamed ") {
+    } else if let Some(rest) = line.strip_prefix(b"renamed ") {
         (false, rest)
-    } else if line.starts_with(['\'', '"']) || line.starts_with("$'") {
+    } else if line.starts_with(b"'") || line.starts_with(b"\"") || line.starts_with(b"$'") {
         (false, line)
     } else {
         return None;
     };
 
     let (from, rest) = unquote_shell(rest)?;
-    let (to, rest) = unquote_shell(rest.strip_prefix(" -> ")?)?;
+    let (to, rest) = unquote_shell(rest.strip_prefix(b" -> ")?)?;
 
     if !rest.is_empty() {
         return None;
@@ -182,52 +219,59 @@ fn split_exactly<'a>(text: &'a str, separator: &str) -> Result<(&'a str, &'a str
     }
 }
 
-fn read_path(rest: &str) -> Result<String, &'static str> {
+fn read_path(rest: &[u8]) -> Result<String, &'static str> {
     match unquote_shell(rest) {
-        Some((path, "")) => Ok(path),
+        Some((path, [])) => Ok(path),
         _ => Err(UNRECOGNIZED),
     }
 }
 
-fn strip_backup_tail(line: &str) -> &str {
-    match line.rfind(" (backup: ") {
-        Some(index) if line.ends_with(')') => &line[..index],
+fn strip_backup_tail(line: &[u8]) -> &[u8] {
+    let quoted_end = line.ends_with(b"')") || line.ends_with(b"\")");
+
+    match (0..line.len())
+        .rev()
+        .find(|index| line[*index..].starts_with(b" (backup: "))
+    {
+        Some(index) if quoted_end => &line[..index],
         _ => line,
     }
 }
 
-fn parse_line(line: &str) -> Result<Parsed, &'static str> {
-    if let Some(result) = parse_name_status(line) {
-        return result;
+fn parse_line(line: &[u8]) -> Result<Parsed, &'static str> {
+    let line = strip_backup_tail(line);
+
+    if let Some(rest) = line.strip_prefix(b"created directory ") {
+        return Ok(read_path(rest).map_or(Parsed::Skip, Parsed::Created));
     }
 
-    if let Some(rest) = line.strip_prefix("created directory ") {
-        return read_path(rest).map(Parsed::Created);
-    }
-
-    if let Some(rest) = line.strip_prefix("removed directory ") {
+    if let Some(rest) = line.strip_prefix(b"removed directory ") {
         return read_path(rest).map(Parsed::RemovedDirectory);
     }
 
-    if let Some(rest) = line.strip_prefix("removed ") {
+    if let Some(rest) = line.strip_prefix(b"removed ") {
         return read_path(rest).map(Parsed::Removed);
     }
-
-    let line = strip_backup_tail(line);
 
     if let Some(parsed) = parse_gnu_move(line) {
         return Ok(parsed);
     }
 
-    if line.starts_with("copied ") || line.starts_with("renamed ") {
-        return Err(if line.matches(" -> ").count() > 1 {
+    if line.starts_with(b"copied ") || line.starts_with(b"renamed ") {
+        return Err(if count_bytes(line, b" -> ") > 1 {
             AMBIGUOUS
         } else {
             UNRECOGNIZED
         });
     }
 
-    if let Some(rest) = line.strip_prefix("Renaming ") {
+    let text = std::str::from_utf8(line).map_err(|_| UNRECOGNIZED)?;
+
+    if let Some(result) = parse_name_status(text) {
+        return result;
+    }
+
+    if let Some(rest) = text.strip_prefix("Renaming ") {
         return split_exactly(rest, " to ").map(|(from, to)| Parsed::Move {
             from: from.to_string(),
             to: to.to_string(),
@@ -235,17 +279,17 @@ fn parse_line(line: &str) -> Result<Parsed, &'static str> {
         });
     }
 
-    if let Some(rest) = line.strip_prefix("rm ") {
+    if let Some(rest) = text.strip_prefix("rm ") {
         return match rest
             .strip_prefix('\'')
             .and_then(|inner| inner.strip_suffix('\''))
         {
-            Some(path) if !path.is_empty() => Ok(Parsed::Delete(path.to_string())),
-            _ => Err(UNRECOGNIZED),
+            Some(path) => Ok(Parsed::Delete(path.to_string())),
+            None => Err(UNRECOGNIZED),
         };
     }
 
-    split_exactly(line, " -> ").map(|(from, to)| Parsed::Move {
+    split_exactly(text, " -> ").map(|(from, to)| Parsed::Move {
         from: from.to_string(),
         to: to.to_string(),
         hand_written: false,
@@ -260,56 +304,49 @@ fn reject(origin: Origin, reason: &str) -> Rejected {
 }
 
 fn parse_records(input: &[u8], working_directory: &Path) -> (Vec<Declaration>, Vec<Rejected>) {
-    let mut fields: Vec<&[u8]> = input.split(|byte| *byte == 0).collect();
+    let mut tokens: Vec<&[u8]> = input.split(|byte| *byte == 0).collect();
 
-    if fields
+    while tokens.first().is_some_and(|token| token.is_empty()) {
+        tokens.remove(0);
+    }
+
+    if tokens
         .last()
-        .is_some_and(|last| last.iter().all(u8::is_ascii_whitespace))
+        .is_some_and(|token| !token.is_empty() && token.iter().all(u8::is_ascii_whitespace))
     {
-        fields.pop();
+        tokens.pop();
+    }
+
+    while tokens.last().is_some_and(|token| token.is_empty()) {
+        tokens.pop();
     }
 
     let mut declarations = Vec::new();
     let mut rejected = Vec::new();
-    let mut fields = fields.into_iter().peekable();
+    let mut tokens = tokens.into_iter();
     let mut index = 0;
 
-    while let Some(status) = fields.next() {
+    while let Some(status) = tokens.next() {
         index += 1;
 
         let status_text = String::from_utf8_lossy(status).into_owned();
-        let count = if is_status(&status_text, "RC") { 2 } else { 1 };
-        let known = is_status(&status_text, "RC") || is_status(&status_text, "DAMT");
-
+        let (count, known) = if is_status(&status_text, "RC") {
+            (2, true)
+        } else {
+            (1, is_status(&status_text, "DAMTU"))
+        };
+        let count = if status.is_empty() { 0 } else { count };
         let paths: Vec<Option<&str>> = (0..count)
-            .map_while(|_| fields.next())
-            .map(|field| std::str::from_utf8(field).ok())
-            .collect();
-        let last = fields.peek().is_none();
-        let paths: Vec<Option<&str>> = paths
-            .into_iter()
-            .enumerate()
-            .map(|(position, path)| {
-                if last && position + 1 == count {
-                    path.map(|path| path.trim_end_matches(['\n', '\r']))
-                } else {
-                    path
-                }
-            })
+            .map_while(|_| tokens.next())
+            .map(|token| std::str::from_utf8(token).ok())
             .collect();
         let text = std::iter::once(status_text.as_str())
             .chain(paths.iter().map(|path| path.unwrap_or("?")))
             .collect::<Vec<_>>()
             .join("\t");
-        let origin = Origin { line: index, text };
+        let origin = origin_of(index, &text);
 
-        if !known {
-            rejected.push(reject(origin, UNRECOGNIZED));
-
-            continue;
-        }
-
-        if paths.len() != count || paths.iter().any(Option::is_none) {
+        if !known || paths.len() != count || paths.iter().any(Option::is_none) {
             rejected.push(reject(origin, UNRECOGNIZED));
 
             continue;
@@ -339,14 +376,20 @@ fn parse_records(input: &[u8], working_directory: &Path) -> (Vec<Declaration>, V
     (declarations, rejected)
 }
 
+#[derive(Clone, Copy)]
+struct Checks<'a> {
+    is_directory: &'a dyn Fn(&Path) -> bool,
+    exists: &'a dyn Fn(&Path) -> bool,
+}
 struct Sequence<'a> {
     slots: Vec<Option<Declaration>>,
     pending: Vec<PendingCopy>,
-    completed: Vec<PathBuf>,
-    created: Vec<PathBuf>,
+    created: Vec<Created>,
+    announced: Vec<PathBuf>,
+    mappings: Vec<Mapping>,
+    rejected_copies: Vec<(String, &'static str)>,
     working_directory: &'a Path,
-    is_directory: &'a dyn Fn(&Path) -> bool,
-    exists: &'a dyn Fn(&Path) -> bool,
+    checks: Checks<'a>,
 }
 
 impl Sequence<'_> {
@@ -356,54 +399,200 @@ impl Sequence<'_> {
         self.slots.len() - 1
     }
 
-    fn complete(&mut self, copy: PendingCopy) {
-        self.completed.push(copy.from.clone());
+    fn mapping_of(&self, path: &Path) -> Option<usize> {
+        self.mappings
+            .iter()
+            .enumerate()
+            .filter(|(_, mapping)| {
+                mapping.is_directory && !mapping.retired && is_beneath(path, &mapping.from_root)
+            })
+            .max_by_key(|(_, mapping)| key_of(&mapping.from_root).len())
+            .map(|(index, _)| index)
+    }
 
-        self.slots[copy.slot] = Some(Declaration::Move {
-            from: copy.from,
-            to: copy.to,
-            origin: copy.origin,
+    fn destination_of(&self, path: &Path, mapping: usize) -> PathBuf {
+        let mapping = &self.mappings[mapping];
+        let depth = mapping.from_root.components().count();
+
+        path.components()
+            .skip(depth)
+            .fold(mapping.to_root.clone(), |joined, part| joined.join(part))
+    }
+
+    fn place_directory_move(&mut self, from: PathBuf, to: PathBuf, origin: &Origin) {
+        let declaration = Some(Declaration::Move {
+            from,
+            to: to.clone(),
+            origin: origin.clone(),
         });
-    }
-
-    fn is_copied_beneath(&self, path: &Path) -> bool {
-        self.pending.iter().any(|copy| is_beneath(&copy.from, path))
-            || self.completed.iter().any(|source| is_beneath(source, path))
-    }
-
-    fn created_match_of(&self, path: &Path) -> Option<PathBuf> {
-        let base = key_of(self.working_directory);
-        let key = key_of(path);
-        let relative = key.strip_prefix(base.as_slice())?;
-
-        if relative.is_empty() {
-            return None;
-        }
-
-        self.created
+        let created = self
+            .created
             .iter()
             .find(|created| {
-                let created_key = key_of(created);
-
-                created_key.len() > relative.len() && created_key.ends_with(relative)
+                key_of(&created.path) == key_of(&to) && self.slots[created.slot].is_none()
             })
-            .cloned()
+            .map(|created| created.slot);
+
+        match created {
+            Some(slot) => self.slots[slot] = declaration,
+            None => {
+                self.add(declaration);
+            }
+        }
     }
 
-    fn is_beneath_copied_root(&self, path: &Path) -> bool {
-        let base = self.working_directory;
-        let Ok(relative) = path.strip_prefix(base) else {
-            return false;
+    fn map_copy(&mut self, from: &Path, to: &Path) {
+        let from_key = key_of(from);
+        let to_key = key_of(to);
+        let common = from_key
+            .iter()
+            .rev()
+            .zip(to_key.iter().rev())
+            .take_while(|(left, right)| left == right)
+            .count();
+        let relative = if is_beneath(from, self.working_directory) {
+            from_key.len() - key_of(self.working_directory).len()
+        } else {
+            from_key.len().saturating_sub(1)
         };
-        let Some(top) = relative.components().next() else {
-            return false;
+        let covering = self
+            .announced
+            .iter()
+            .filter(|created| is_beneath(to, created) && key_of(created) != to_key)
+            .map(|created| to_key.len() - key_of(created).len())
+            .max();
+        let trailing = common.min(relative.saturating_sub(1));
+        let depth = match covering {
+            Some(depth) if depth <= common => depth,
+            _ => trailing,
         };
-        let root = base.join(top);
+        let roots = (from.ancestors().nth(depth), to.ancestors().nth(depth));
 
-        root != path && self.is_copied_beneath(&root)
+        let (from_root, to_root, is_directory) = match roots {
+            (Some(from_root), Some(to_root))
+                if depth >= 1
+                    && self
+                        .announced
+                        .iter()
+                        .any(|created| is_beneath(created, to_root)) =>
+            {
+                (from_root.to_path_buf(), to_root.to_path_buf(), true)
+            }
+            _ => (from.to_path_buf(), to.to_path_buf(), false),
+        };
+
+        let known = self
+            .mappings
+            .iter()
+            .any(|mapping| !mapping.retired && key_of(&mapping.from_root) == key_of(&from_root));
+
+        if !known {
+            self.mappings.push(Mapping {
+                from_root,
+                to_root,
+                is_directory,
+                retired: false,
+            });
+        }
     }
 
-    fn apply(&mut self, parsed: Parsed, origin: &Origin) -> Result<(), &'static str> {
+    fn retire(&mut self, path: &Path, is_directory: bool) {
+        for mapping in &mut self.mappings {
+            if mapping.is_directory == is_directory && key_of(&mapping.from_root) == key_of(path) {
+                mapping.retired = true;
+            }
+        }
+    }
+
+    fn map_created_run(&mut self, entries: &[Entry], position: usize, path: &Path) -> bool {
+        let working = key_of(self.working_directory);
+        let orphans: Vec<&Created> = self
+            .created
+            .iter()
+            .filter(|created| {
+                self.slots[created.slot].is_none()
+                    && !self
+                        .mappings
+                        .iter()
+                        .any(|mapping| is_beneath(&created.path, &mapping.to_root))
+            })
+            .collect();
+        let roots: Vec<&Created> = orphans
+            .iter()
+            .copied()
+            .filter(|created| {
+                !orphans.iter().any(|other| {
+                    key_of(&other.path) != key_of(&created.path)
+                        && is_beneath(&created.path, &other.path)
+                })
+            })
+            .collect();
+
+        for root in roots {
+            let root_key = key_of(&root.path);
+            let mirrored: BTreeSet<Vec<String>> = orphans
+                .iter()
+                .filter(|created| {
+                    key_of(&created.path) != root_key && is_beneath(&created.path, &root.path)
+                })
+                .map(|created| key_of(&created.path)[root_key.len()..].to_vec())
+                .collect();
+
+            for candidate in path.ancestors() {
+                let candidate_key = key_of(candidate);
+
+                if candidate_key.len() <= working.len() || !candidate_key.starts_with(&working) {
+                    break;
+                }
+
+                let mut removed = BTreeSet::new();
+                let mut found = false;
+
+                for entry in &entries[position..] {
+                    let Ok(Parsed::RemovedDirectory(text)) = &entry.parsed else {
+                        continue;
+                    };
+                    let Ok(removed_path) = resolve_path(text, self.working_directory) else {
+                        continue;
+                    };
+                    let removed_key = key_of(&removed_path);
+
+                    if removed_key == candidate_key {
+                        found = true;
+
+                        break;
+                    }
+
+                    if removed_key.starts_with(&candidate_key) {
+                        removed.insert(removed_key[candidate_key.len()..].to_vec());
+                    }
+                }
+
+                if found && removed == mirrored {
+                    let to_root = root.path.clone();
+
+                    self.mappings.push(Mapping {
+                        from_root: candidate.to_path_buf(),
+                        to_root,
+                        is_directory: true,
+                        retired: false,
+                    });
+
+                    return true;
+                }
+            }
+        }
+
+        false
+    }
+
+    fn apply(
+        &mut self,
+        entries: &[Entry],
+        position: usize,
+        parsed: &Parsed,
+    ) -> Result<(), &'static str> {
+        let origin = &entries[position].origin;
         let working_directory = self.working_directory;
         let resolve = |text: &str| resolve_path(text, working_directory);
         let delete = |path: PathBuf| Declaration::Delete {
@@ -418,14 +607,14 @@ impl Sequence<'_> {
                 to,
                 hand_written,
             } => {
-                let from = resolve(&from)?;
-                let mut to = resolve(&to)?;
+                let from = resolve(from)?;
+                let mut to = resolve(to)?;
 
-                if hand_written && (self.is_directory)(&to) {
+                if *hand_written && (self.checks.is_directory)(&to) {
                     if let Some(name) = from.file_name() {
                         let inside = to.join(name);
 
-                        if (self.exists)(&inside) {
+                        if (self.checks.exists)(&inside) {
                             to = inside;
                         }
                     }
@@ -438,11 +627,21 @@ impl Sequence<'_> {
                 }));
             }
             Parsed::Delete(path) => {
-                self.add(Some(delete(resolve(&path)?)));
+                self.add(Some(delete(resolve(path)?)));
             }
             Parsed::Copy(from, to) => {
-                let copy_from = resolve(&from)?;
-                let copy_to = resolve(&to)?;
+                let resolved = resolve(from).and_then(|from| Ok((from, resolve(to)?)));
+                let (copy_from, copy_to) = match resolved {
+                    Ok(paths) => paths,
+                    Err(reason) => {
+                        self.rejected_copies.push((from.clone(), reason));
+
+                        return Err(reason);
+                    }
+                };
+
+                self.map_copy(&copy_from, &copy_to);
+
                 let slot = self.add(None);
 
                 self.pending.push(PendingCopy {
@@ -453,58 +652,68 @@ impl Sequence<'_> {
                 });
             }
             Parsed::Created(path) => {
-                let path = resolve(&path)?;
+                if let Ok(path) = resolve(path) {
+                    let slot = self.add(None);
 
-                self.created.push(path);
+                    self.created.push(Created { path, slot });
+                }
             }
-            Parsed::Removed(path) => {
-                let path = resolve(&path)?;
+            Parsed::Removed(text) => {
+                if let Some((_, reason)) =
+                    self.rejected_copies.iter().find(|(from, _)| from == text)
+                {
+                    return Err(reason);
+                }
+
+                let path = resolve(text)?;
                 let matching = self
                     .pending
                     .iter()
                     .position(|copy| key_of(&copy.from) == key_of(&path));
 
-                match matching {
-                    Some(position) => {
-                        let copy = self.pending.remove(position);
+                if let Some(matching) = matching {
+                    let copy = self.pending.remove(matching);
 
-                        self.complete(copy);
+                    self.slots[copy.slot] = Some(Declaration::Move {
+                        from: copy.from,
+                        to: copy.to,
+                        origin: copy.origin,
+                    });
+
+                    self.retire(&path, false);
+                } else if let Some(mapping) = self.mapping_of(&path) {
+                    let to = self.destination_of(&path, mapping);
+
+                    self.add(Some(Declaration::Move {
+                        from: path,
+                        to,
+                        origin: origin.clone(),
+                    }));
+                } else {
+                    self.add(Some(delete(path)));
+                }
+            }
+            Parsed::RemovedDirectory(text) => {
+                let path = resolve(text)?;
+
+                if self.mapping_of(&path).is_none() {
+                    self.map_created_run(entries, position, &path);
+                }
+
+                match self.mapping_of(&path) {
+                    Some(mapping) => {
+                        let to = self.destination_of(&path, mapping);
+                        let is_root = key_of(&self.mappings[mapping].from_root) == key_of(&path);
+
+                        self.place_directory_move(path.clone(), to, origin);
+
+                        if is_root {
+                            self.retire(&path, true);
+                        }
                     }
                     None => {
                         self.add(Some(delete(path)));
                     }
-                }
-            }
-            Parsed::RemovedDirectory(path) => {
-                let path = resolve(&path)?;
-                let (beneath, others): (Vec<PendingCopy>, Vec<PendingCopy>) = self
-                    .pending
-                    .drain(..)
-                    .partition(|copy| is_beneath(&copy.from, &path));
-                let copied = !beneath.is_empty()
-                    || self
-                        .completed
-                        .iter()
-                        .any(|source| is_beneath(source, &path));
-
-                self.pending = others;
-
-                for copy in beneath {
-                    self.complete(copy);
-                }
-
-                if copied {
-                    return Ok(());
-                }
-
-                if let Some(destination) = self.created_match_of(&path) {
-                    self.add(Some(Declaration::Move {
-                        from: path,
-                        to: destination,
-                        origin: origin.clone(),
-                    }));
-                } else if !self.is_beneath_copied_root(&path) {
-                    self.add(Some(delete(path)));
                 }
             }
         }
@@ -513,29 +722,54 @@ impl Sequence<'_> {
     }
 }
 
-fn parse_lines(input: &[u8], mut sequence: Sequence) -> (Vec<Declaration>, Vec<Rejected>) {
+fn parse_lines(
+    input: &[u8],
+    working_directory: &Path,
+    checks: Checks,
+) -> (Vec<Declaration>, Vec<Rejected>) {
+    let entries: Vec<Entry> = input
+        .split(|byte| *byte == b'\n')
+        .enumerate()
+        .filter_map(|(index, raw)| {
+            let line = raw.trim_ascii_end();
+
+            if line.is_empty() {
+                return None;
+            }
+
+            Some(Entry {
+                origin: origin_of(index + 1, &String::from_utf8_lossy(line)),
+                parsed: parse_line(line),
+            })
+        })
+        .collect();
+    let announced = entries
+        .iter()
+        .filter_map(|entry| match &entry.parsed {
+            Ok(Parsed::Created(text)) => resolve_path(text, working_directory).ok(),
+            _ => None,
+        })
+        .collect();
+    let mut sequence = Sequence {
+        slots: Vec::new(),
+        pending: Vec::new(),
+        created: Vec::new(),
+        announced,
+        mappings: Vec::new(),
+        rejected_copies: Vec::new(),
+        working_directory,
+        checks,
+    };
     let mut rejected = Vec::new();
 
-    for (index, raw) in input.split(|byte| *byte == b'\n').enumerate() {
-        let decoded = String::from_utf8_lossy(raw);
-        let line = decoded.trim_end();
-
-        if line.is_empty() {
-            continue;
-        }
-
-        let origin = Origin {
-            line: index + 1,
-            text: line.to_string(),
-        };
-        let parsed = if std::str::from_utf8(raw).is_ok() {
-            parse_line(line)
-        } else {
-            Err(UNRECOGNIZED)
+    for (position, entry) in entries.iter().enumerate() {
+        let outcome = match &entry.parsed {
+            Ok(parsed) => sequence.apply(&entries, position, parsed),
+            Err(reason) => Err(*reason),
         };
 
-        if let Err(reason) = parsed.and_then(|parsed| sequence.apply(parsed, &origin)) {
-            rejected.push(reject(origin, reason));
+        if let Err(reason) = outcome {
+            rejected.push(reject(entry.origin.clone(), reason));
         }
     }
 
@@ -555,12 +789,8 @@ pub fn parse_declarations(
     } else {
         parse_lines(
             input,
-            Sequence {
-                slots: Vec::new(),
-                pending: Vec::new(),
-                completed: Vec::new(),
-                created: Vec::new(),
-                working_directory,
+            working_directory,
+            Checks {
                 is_directory,
                 exists,
             },
