@@ -1,6 +1,6 @@
 [package]
 name = "refs"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Matt Cavender"]
 description = "List file references and repair them from declared moves"
 license = "MIT"
