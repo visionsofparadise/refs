@@ -1,17 +1,12 @@
 use crate::declaration_messages::Template;
 use crate::unquote::read_quoted_segment;
 
-/// How a template's arguments are written in a line.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reading {
-    /// GNU shell quoting: each argument is one or more adjacent quoted segments.
     Shell,
-    /// Raw text between the template's literal parts, as git prints paths.
     Raw,
 }
 
-/// Every way `line` reads as `template`: each reading holds the arguments in printf order.
-/// More than one reading means the split is ambiguous.
 pub fn match_template(line: &[u8], template: &Template, reading: Reading) -> Vec<Vec<String>> {
     let mut readings = Vec::new();
 

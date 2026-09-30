@@ -298,9 +298,6 @@ fn parsed_of(message: Message, arguments: Vec<String>) -> Parsed {
     }
 }
 
-/// Reads a line printed in another locale: every translated template (each table's English
-/// form, first, is read by the English forms) is tried, and a line reading more than one way
-/// is ambiguous.
 fn parse_translated(line: &[u8]) -> Option<Result<Parsed, &'static str>> {
     let mut readings: Vec<Parsed> = Vec::new();
 

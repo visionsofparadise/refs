@@ -25,9 +25,6 @@ fn starts_quoted_segment(text: &[u8]) -> bool {
     matches!(text, [b'\'' | b'"', ..] | [b'$' | b'\\', b'\'', ..])
 }
 
-/// Reads one GNU shell-quoted segment (`'…'`, `$'…'`, `"…"` or `\'`) at the start of `text`,
-/// appending its decoded bytes to `word`; returns its length, or None when `text` starts with
-/// no segment or an unterminated one.
 pub fn read_quoted_segment(text: &[u8], word: &mut Vec<u8>) -> Option<usize> {
     match text {
         [b'\'', rest @ ..] => {

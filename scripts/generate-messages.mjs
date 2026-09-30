@@ -1,6 +1,3 @@
-// Generates src/declaration_messages.rs: every translation of the coreutils and git messages
-// that declare a move or delete, read from the gettext catalogues of pinned release ranges.
-// Downloads are cached under .scratch/messages. Run with `node scripts/generate-messages.mjs`.
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, rmSync, statfsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
@@ -31,10 +28,6 @@ const GIT_SOURCE = "https://github.com/git/git";
 const CACHE = join(".scratch", "messages");
 const OUTPUT = join("src", "declaration_messages.rs");
 
-// Each table gathers the msgids that print one message. coreutils before 9.5 translates only
-// the `renamed ` and `copied ` prefixes and prints the untranslated `%s -> %s` after them;
-// `created directory %s` is copy.c's and `created directory %s\n` mkdir's. git prints
-// `rm '%s'` untranslated, so it has no table.
 const MESSAGES = [
 	["RENAMED", "coreutils", "renamed %s -> %s", "", 2],
 	["RENAMED", "coreutils", "renamed ", "%s -> %s", 2],
@@ -122,7 +115,6 @@ const entriesOf = (text) => {
 	return entries;
 };
 
-// A template is its literal text around each argument and the argument index at each slot.
 const templateOf = (format, count) => {
 	const literals = [""];
 	const argumentsAt = [];
@@ -154,9 +146,7 @@ const templateOf = (format, count) => {
 	return { literals, argumentsAt };
 };
 
-// The printed format: the translation without its message's newline, then the untranslated
-// remainder, trailing whitespace trimmed as the parser trims a line.
-const normalized = (translation, { msgid, suffix }) => {
+const printedFormatOf = (translation, { msgid, suffix }) => {
 	const printed = (msgid.endsWith("\n") ? translation.replace(/\n$/, "") : translation) + suffix;
 
 	return printed.replace(/[ \t\r\n]+$/, "");
@@ -177,7 +167,7 @@ const collect = (messages, catalogue, skipped) => {
 			.map(([, value]) => value);
 
 		for (const translation of entry.fuzzy ? [] : translations) {
-			const template = templateOf(normalized(translation, message), message.count);
+			const template = templateOf(printedFormatOf(translation, message), message.count);
 
 			if (!template) {
 				skipped.push(`${message.tool} ${version} ${language}: ${JSON.stringify(translation)}`);
@@ -331,7 +321,7 @@ const tablesOf = () => {
 
 	for (const message of MESSAGES) {
 		const table = tables.get(message.table) ?? { tool: message.tool, messages: [], templates: new Map() };
-		const english = templateOf(normalized(message.msgid, message), message.count);
+		const english = templateOf(printedFormatOf(message.msgid, message), message.count);
 		const add = (template, languages, versions) => {
 			const key = JSON.stringify(template);
 			const known = table.templates.get(key) ?? {
