@@ -7,7 +7,7 @@ use crate::walk_scope::ScopeOptions;
     name = "refs",
     bin_name = "refs",
     version,
-    about = "List file references and repair them from declared moves",
+    about = env!("CARGO_PKG_DESCRIPTION"),
     after_help = "Listing prints each reference as <file>:<line>:<column>: <token> -> <target>, with (dangling) appended to a dangling one.
 
 Fix mode (refs - [PATH]...) reads declarations from stdin after the moves and deletes have happened: git diff --name-status [-z], GNU or BSD mv -v, git mv -v, rm -v, git rm, or hand-written R <old> <new> and D <path> lines. It repoints the references those moves broke and prints each rewrite as <file>:<line>:<column>: <old> -> <new>; a reference to a deleted path, to a path outside the scanned paths, or with no faithful rewriting prints with (deleted), (out of scope) or (unrewritable) appended, and a skipped declaration prints to stderr.
