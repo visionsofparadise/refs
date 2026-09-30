@@ -304,6 +304,10 @@ fn never_rewrites_the_file_read_as_declarations() {
     );
 
     assert_eq!(
+        String::from_utf8(stdout).unwrap(),
+        "decl.txt:1:3: docs/a.md -> docs/b.md (not rewritten)\nindex.md:1:5: docs/a.md -> docs/b.md\n"
+    );
+    assert_eq!(
         String::from_utf8(stderr).unwrap(),
         "refs: decl.txt: declaration input not rewritten\n"
     );

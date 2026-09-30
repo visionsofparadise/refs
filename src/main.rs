@@ -59,8 +59,9 @@ fn report_scope(scope: &Scope, streams: &mut Streams) {
     }
 }
 
-fn line_of(finding: &Finding, working_directory: &Path) -> String {
+fn line_of(finding: &Finding, withheld: bool, working_directory: &Path) -> String {
     let (replacement, kind) = match &finding.outcome {
+        Outcome::Rewritten { replacement } if withheld => (replacement.clone(), " (not rewritten)"),
         Outcome::Rewritten { replacement } => (replacement.clone(), ""),
         Outcome::Deleted { target } => (format_path(target, working_directory), " (deleted)"),
         Outcome::OutOfScope { target } => {
@@ -104,8 +105,21 @@ fn fix(
     let scope = walk_scope(paths, options, working_directory);
     let plan = plan_fix(declarations, &scope, working_directory);
 
+    let inputs: Vec<&PathBuf> = plan
+        .edits
+        .iter()
+        .map(|edit| &edit.file)
+        .filter(|file| is_input(file, streams.stdin_handle.as_ref()))
+        .collect();
+
     for finding in &plan.findings {
-        let _ = writeln!(streams.stdout, "{}", line_of(finding, working_directory));
+        let withheld = inputs.contains(&&finding.file);
+
+        let _ = writeln!(
+            streams.stdout,
+            "{}",
+            line_of(finding, withheld, working_directory)
+        );
     }
 
     for destination in &plan.unscanned {
@@ -134,15 +148,12 @@ fn fix(
     }
 
     let mut failed = !scope.errors.is_empty() || !plan.errors.is_empty();
-    let mut withheld = false;
 
     for edit in &plan.edits {
         let file = format_path(&edit.file, working_directory);
 
-        if is_input(&edit.file, streams.stdin_handle.as_ref()) {
+        if inputs.contains(&&edit.file) {
             streams.report(&format!("{file}: declaration input not rewritten"));
-
-            withheld = true;
         } else if !dry_run {
             if let Err(error) = write_edits(std::slice::from_ref(edit)) {
                 streams.report(&format!("{file}: {error}"));
@@ -161,7 +172,7 @@ fn fix(
         .iter()
         .any(|finding| !matches!(finding.outcome, Outcome::Rewritten { .. }));
 
-    if unrepaired || withheld || !plan.unscanned.is_empty() || !rejected.is_empty() {
+    if unrepaired || !inputs.is_empty() || !plan.unscanned.is_empty() || !rejected.is_empty() {
         return FINDINGS;
     }
 

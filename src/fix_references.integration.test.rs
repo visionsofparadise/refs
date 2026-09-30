@@ -926,3 +926,38 @@ fn accepts_a_name_refilled_after_its_content_moved_away() {
         ["i.md:1:1: a.md -> a-old.md", "i.md:1:6: n.md -> a.md"]
     );
 }
+
+#[test]
+fn keeps_an_explicitly_relative_import_explicit() {
+    let tree = tree_of(&[
+        (
+            "lib/y.ts",
+            "import x from \"../src/x.ts\";
+",
+        ),
+        ("src/x.ts", ""),
+    ]);
+    let moved = relocate(&tree, "src/x.ts", "lib/x.ts", 1);
+
+    assert_eq!(
+        report_of(&tree, vec![moved]).lines,
+        ["lib/y.ts:1:16: ../src/x.ts -> ./x.ts"]
+    );
+}
+
+#[test]
+fn leaves_a_round_trip_and_its_neighbours_alone() {
+    let tree = tree_of(&[
+        ("x.md", "X"),
+        ("docs/x.md", "DX"),
+        (
+            "docs/a.md",
+            "see ../x.md
+",
+        ),
+    ]);
+    let first = relocate(&tree, "docs/a.md", "docs/sub/a.md", 1);
+    let second = relocate(&tree, "docs/sub/a.md", "docs/a.md", 2);
+
+    assert!(report_of(&tree, vec![first, second]).lines.is_empty());
+}

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use crate::compose_declarations::{compose_declarations, rebase, Move};
+use crate::compose_declarations::{compose_declarations, rebase, Checks, Move};
 use crate::format_path::format_path;
 use crate::list_references::ExistenceCache;
 use crate::map_in_parallel::map_in_parallel;
@@ -512,7 +512,13 @@ pub fn plan_fix(
         .map(|declaration| canonicalize_declaration(declaration, working_directory, &cache))
         .collect();
 
-    let composition = compose_declarations(declarations, &|path| cache.exists(path));
+    let composition = compose_declarations(
+        declarations,
+        &Checks {
+            exists: &|path| cache.exists(path),
+            is_directory: &|path| path.is_dir(),
+        },
+    );
     let moves = Moves {
         moves: composition.moves,
         deletes: composition.deletes,
@@ -530,7 +536,7 @@ pub fn plan_fix(
         unscanned: moves
             .moves
             .iter()
-            .filter(|found| !is_in_scope(&found.to, &context))
+            .filter(|found| found.from != found.to && !is_in_scope(&found.to, &context))
             .fold(Vec::new(), |mut unscanned: Vec<PathBuf>, found| {
                 if !unscanned
                     .iter()

@@ -55,7 +55,7 @@ fn split_relative(target: &Path, base: &Path, style: &PathStyle) -> Option<(Stri
     let lone =
         names.len() == 1 && !bare && !has_interior_dot(&names[0]) && !style.trailing_separator;
 
-    let head = if (style.dot_prefix && !bare) || lone {
+    let head = if ((style.dot_prefix || style.parent_prefix) && !bare) || lone {
         format!(".{}", style.separator)
     } else {
         String::new()

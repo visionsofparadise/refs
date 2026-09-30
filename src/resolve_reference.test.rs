@@ -246,6 +246,13 @@ fn detects_a_dot_prefix() {
 }
 
 #[test]
+fn detects_a_parent_prefix() {
+    assert!(style_of("../a.md").parent_prefix);
+    assert!(style_of("..\\a.md").parent_prefix);
+    assert!(!style_of("./a.md").parent_prefix);
+}
+
+#[test]
 fn detects_a_trailing_separator() {
     assert!(style_of("sub/").trailing_separator);
     assert!(!style_of("sub/a.md").trailing_separator);

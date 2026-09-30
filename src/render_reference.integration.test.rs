@@ -19,6 +19,7 @@ fn reports_a_rendering_an_earlier_existing_candidate_would_shadow() {
                 doubled_backslashes: false,
                 escaped_slashes: false,
                 dot_prefix: false,
+                parent_prefix: false,
                 trailing_separator: false,
                 percent_encoded: false,
                 file_scheme: false,

@@ -25,6 +25,7 @@ fn create_plain_style() -> PathStyle {
         doubled_backslashes: false,
         escaped_slashes: false,
         dot_prefix: false,
+        parent_prefix: false,
         trailing_separator: false,
         percent_encoded: false,
         file_scheme: false,
@@ -128,6 +129,23 @@ fn renders_doubled_backslashes() {
     assert_eq!(
         render_file_relative(&["work", "docs", "a.md"], style).as_deref(),
         Some("..\\\\docs\\\\a.md")
+    );
+}
+
+#[test]
+fn keeps_an_explicitly_relative_rendering_explicit() {
+    let style = PathStyle {
+        parent_prefix: true,
+        ..create_plain_style()
+    };
+
+    assert_eq!(
+        render_file_relative(&["work", "notes", "x.ts"], style.clone()).as_deref(),
+        Some("./x.ts")
+    );
+    assert_eq!(
+        render_file_relative(&["work", "docs", "x.ts"], style).as_deref(),
+        Some("../docs/x.ts")
     );
 }
 

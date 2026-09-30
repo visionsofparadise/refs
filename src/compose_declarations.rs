@@ -20,12 +20,19 @@ const SOURCE_STILL_EXISTS: &str = "source still exists";
 const DESTINATION_MISSING: &str = "destination missing";
 const PATH_STILL_EXISTS: &str = "path still exists";
 
+#[derive(Clone)]
+struct Visit {
+    path: PathBuf,
+    origin: Origin,
+}
+
 struct Item {
     original: PathBuf,
+    arrival: bool,
     location: Option<PathBuf>,
-    visited: Vec<PathBuf>,
-    origin: Origin,
+    visited: Vec<Visit>,
     destroyed_by: Option<Origin>,
+    overwritten_by: Option<usize>,
 }
 
 struct Step {
@@ -34,9 +41,20 @@ struct Step {
     origin: Origin,
 }
 
+enum Occupant {
+    Held(usize),
+    Vacated(Option<PathBuf>),
+    Unknown,
+}
+
 #[derive(Default)]
 struct Model {
     items: Vec<Item>,
+}
+
+pub struct Checks<'a> {
+    pub exists: &'a dyn Fn(&Path) -> bool,
+    pub is_directory: &'a dyn Fn(&Path) -> bool,
 }
 
 pub fn rebase(path: &Path, base: &Path, onto: &Path) -> PathBuf {
@@ -60,64 +78,105 @@ impl Model {
             .map(|(index, _)| index)
     }
 
-    fn whereabouts_of(&self, path: &Path) -> Option<PathBuf> {
-        self.items
+    fn occupant_of(&self, path: &Path) -> Occupant {
+        let held = self.holder_of(path).map(|index| {
+            let location = self.items[index].location.as_ref();
+
+            (location.map_or(0, |location| key_of(location).len()), index)
+        });
+
+        let vacated = self
+            .items
             .iter()
             .filter_map(|item| {
-                let location = item.location.as_ref()?;
-                let passed = item.visited.iter().rev().skip(1);
+                let location = item.location.as_ref();
+                let passed = item
+                    .visited
+                    .iter()
+                    .rev()
+                    .skip(usize::from(location.is_some()));
 
                 passed
-                    .filter(|visited| is_beneath(path, visited))
-                    .max_by_key(|visited| key_of(visited).len())
-                    .map(|visited| (key_of(visited).len(), rebase(path, visited, location)))
+                    .filter(|visit| is_beneath(path, &visit.path))
+                    .max_by_key(|visit| key_of(&visit.path).len())
+                    .map(|visit| {
+                        let whereabouts =
+                            location.map(|location| rebase(path, &visit.path, location));
+
+                        (key_of(&visit.path).len(), whereabouts)
+                    })
             })
-            .max_by_key(|(length, _)| *length)
-            .map(|(_, whereabouts)| whereabouts)
+            .max_by_key(|(length, whereabouts)| (*length, whereabouts.is_some()));
+
+        match (held, vacated) {
+            (Some((held, index)), Some((vacated, _))) if held >= vacated => Occupant::Held(index),
+            (Some((_, index)), None) => Occupant::Held(index),
+            (_, Some((_, whereabouts))) => Occupant::Vacated(whereabouts),
+            (None, None) => Occupant::Unknown,
+        }
     }
 
-    fn materialize(&mut self, path: &Path, origin: &Origin) -> usize {
-        let item = match self.holder_of(path) {
-            Some(holder) => {
+    fn materialize(&mut self, path: &Path, origin: &Origin) -> (usize, bool) {
+        let fresh = |arrival: bool| Item {
+            original: path.to_path_buf(),
+            arrival,
+            location: Some(path.to_path_buf()),
+            visited: vec![Visit {
+                path: path.to_path_buf(),
+                origin: origin.clone(),
+            }],
+            destroyed_by: None,
+            overwritten_by: None,
+        };
+
+        let item = match self.occupant_of(path) {
+            Occupant::Held(holder) => {
                 let parent = &self.items[holder];
                 let location = parent.location.clone().unwrap_or_default();
 
                 if is_same(&location, path) {
-                    return holder;
+                    return (holder, false);
                 }
 
                 Item {
                     original: rebase(path, &location, &parent.original),
+                    arrival: parent.arrival,
                     location: Some(path.to_path_buf()),
                     visited: parent
                         .visited
                         .iter()
-                        .map(|visited| rebase(path, &location, visited))
+                        .map(|visit| Visit {
+                            path: rebase(path, &location, &visit.path),
+                            origin: visit.origin.clone(),
+                        })
                         .collect(),
-                    origin: origin.clone(),
                     destroyed_by: None,
+                    overwritten_by: None,
                 }
             }
-            None => Item {
-                original: path.to_path_buf(),
-                location: Some(path.to_path_buf()),
-                visited: vec![path.to_path_buf()],
-                origin: origin.clone(),
-                destroyed_by: None,
-            },
+            Occupant::Vacated(_) => fresh(true),
+            Occupant::Unknown => fresh(false),
         };
 
         self.items.push(item);
 
-        self.items.len() - 1
+        (self.items.len() - 1, true)
     }
 
-    fn destroy(&mut self, path: &Path, origin: &Origin, vacated: &dyn Fn(&Path) -> bool) {
-        if !vacated(path) && self.holder_of(path).is_some() {
-            let index = self.materialize(path, origin);
+    fn destroy(
+        &mut self,
+        path: &Path,
+        origin: &Origin,
+        vacated: &dyn Fn(&Path) -> bool,
+        overwriter: Option<usize>,
+    ) {
+        if !vacated(path) && matches!(self.occupant_of(path), Occupant::Held(_)) {
+            let (index, split) = self.materialize(path, origin);
+            let item = &mut self.items[index];
 
-            self.items[index].location = None;
-            self.items[index].destroyed_by = Some(origin.clone());
+            item.location = None;
+            item.destroyed_by = Some(origin.clone());
+            item.overwritten_by = overwriter.filter(|_| split);
         }
 
         for item in &mut self.items {
@@ -134,17 +193,23 @@ impl Model {
     }
 
     fn delete(&mut self, path: &Path, origin: &Origin, vacated: &dyn Fn(&Path) -> bool) {
-        if !vacated(path) && self.holder_of(path).is_none() {
+        let occupant = self.occupant_of(path);
+
+        if !vacated(path) && !matches!(occupant, Occupant::Held(_)) {
             self.items.push(Item {
                 original: path.to_path_buf(),
+                arrival: matches!(occupant, Occupant::Vacated(_)),
                 location: None,
-                visited: vec![path.to_path_buf()],
-                origin: origin.clone(),
+                visited: vec![Visit {
+                    path: path.to_path_buf(),
+                    origin: origin.clone(),
+                }],
                 destroyed_by: Some(origin.clone()),
+                overwritten_by: None,
             });
         }
 
-        self.destroy(path, origin, vacated);
+        self.destroy(path, origin, vacated, None);
     }
 
     fn apply(&mut self, group: Vec<Declaration>) {
@@ -154,10 +219,10 @@ impl Model {
         for declaration in group {
             match declaration {
                 Declaration::Move { from, to, origin } => {
-                    let redundant = self.holder_of(&from).is_none()
-                        && self
-                            .whereabouts_of(&from)
-                            .is_some_and(|whereabouts| is_same(&whereabouts, &to));
+                    let redundant = matches!(
+                        self.occupant_of(&from),
+                        Occupant::Vacated(Some(whereabouts)) if is_same(&whereabouts, &to)
+                    );
 
                     if !redundant {
                         steps.push(Step { from, to, origin });
@@ -167,9 +232,10 @@ impl Model {
             }
         }
 
-        for step in &steps {
-            self.materialize(&step.from, &step.origin);
-        }
+        let movers: Vec<usize> = steps
+            .iter()
+            .map(|step| self.materialize(&step.from, &step.origin).0)
+            .collect();
 
         let sources: Vec<PathBuf> = steps.iter().map(|step| step.from.clone()).collect();
         let vacated = |path: &Path| sources.iter().any(|source| is_beneath(path, source));
@@ -190,8 +256,8 @@ impl Model {
             })
             .collect();
 
-        for step in &steps {
-            self.destroy(&step.to, &step.origin, &vacated);
+        for (step, mover) in steps.iter().zip(&movers) {
+            self.destroy(&step.to, &step.origin, &vacated, Some(*mover));
         }
 
         for (path, origin) in &deletes {
@@ -207,9 +273,35 @@ impl Model {
 
                 item.location = Some(moved.clone());
 
-                item.visited.push(moved);
+                item.visited.push(Visit {
+                    path: moved,
+                    origin: step.origin.clone(),
+                });
             }
         }
+    }
+
+    fn is_refilled(&self, path: &Path, owner: &Item) -> bool {
+        self.items
+            .iter()
+            .filter(|item| !std::ptr::eq(*item, owner))
+            .any(|item| {
+                let skip = usize::from(!item.arrival);
+
+                item.visited
+                    .iter()
+                    .skip(skip)
+                    .any(|visit| is_beneath(&visit.path, path) || is_beneath(path, &visit.path))
+            })
+    }
+
+    fn is_void(&self, item: &Item, checks: &Checks) -> bool {
+        item.overwritten_by.is_some_and(|overwriter| {
+            self.items[overwriter]
+                .location
+                .as_ref()
+                .is_some_and(|location| (checks.is_directory)(location))
+        })
     }
 }
 
@@ -226,10 +318,82 @@ fn reject(rejected: &mut Vec<Rejected>, origin: &Origin, reason: &str) {
     });
 }
 
-pub fn compose_declarations(
-    declarations: Vec<Declaration>,
-    exists: &dyn Fn(&Path) -> bool,
-) -> Composition {
+struct Outcome<'a> {
+    item: &'a Item,
+    trail: Vec<&'a Visit>,
+    destroyed: bool,
+}
+
+enum Settled<'a> {
+    Changed(Outcome<'a>),
+    Returned(&'a Path),
+    Unchanged,
+}
+
+fn settle<'a>(
+    model: &'a Model,
+    item: &'a Item,
+    checks: &Checks,
+    rejected: &mut Vec<Rejected>,
+) -> Settled<'a> {
+    if item.arrival || model.is_void(item, checks) {
+        return Settled::Unchanged;
+    }
+
+    let exists = checks.exists;
+    let mut trail: Vec<&Visit> = item.visited.iter().collect();
+
+    if item.location.is_none() {
+        if exists(&item.original) && !model.is_refilled(&item.original, item) {
+            if let Some(origin) = &item.destroyed_by {
+                reject(rejected, origin, PATH_STILL_EXISTS);
+            }
+
+            return Settled::Unchanged;
+        }
+
+        return Settled::Changed(Outcome {
+            item,
+            trail,
+            destroyed: true,
+        });
+    }
+
+    let case_only =
+        |visit: &Visit| is_same(&visit.path, &item.original) && visit.path != item.original;
+
+    while trail.len() > 1 && trail.last().is_some_and(|visit| !exists(&visit.path)) {
+        if let Some(visit) = trail.pop() {
+            reject(rejected, &visit.origin, DESTINATION_MISSING);
+        }
+    }
+
+    let Some(last) = trail.last() else {
+        return Settled::Unchanged;
+    };
+
+    if last.path == item.original {
+        return if trail.len() > 1 {
+            Settled::Returned(&item.original)
+        } else {
+            Settled::Unchanged
+        };
+    }
+
+    if exists(&item.original) && !model.is_refilled(&item.original, item) && !case_only(last) {
+        reject(rejected, &trail[1].origin, SOURCE_STILL_EXISTS);
+
+        return Settled::Unchanged;
+    }
+
+    Settled::Changed(Outcome {
+        item,
+        trail,
+        destroyed: false,
+    })
+}
+
+pub fn compose_declarations(declarations: Vec<Declaration>, checks: &Checks) -> Composition {
     let mut model = Model::default();
     let mut group: Vec<Declaration> = Vec::new();
 
@@ -248,63 +412,83 @@ pub fn compose_declarations(
 
     model.apply(group);
 
-    let refilled = |path: &Path| model.holder_of(path).is_some();
     let mut composition = Composition::default();
-    let mut sources: Vec<Vec<String>> = Vec::new();
-    let mut moves: Vec<(PathBuf, PathBuf, &Origin)> = Vec::new();
-    let mut deletes: Vec<(PathBuf, &Origin)> = Vec::new();
+    let mut outcomes: Vec<Outcome> = Vec::new();
+    let mut returned: Vec<&Path> = Vec::new();
 
     for item in &model.items {
-        match (&item.location, &item.destroyed_by) {
-            (Some(location), _) if *location != item.original => {
-                moves.push((item.original.clone(), location.clone(), &item.origin));
-            }
-            (None, Some(destroyed_by)) => deletes.push((item.original.clone(), destroyed_by)),
-            _ => {}
+        match settle(&model, item, checks, &mut composition.rejected) {
+            Settled::Changed(outcome) => outcomes.push(outcome),
+            Settled::Returned(original) => returned.push(original),
+            Settled::Unchanged => {}
         }
-
-        sources.push(key_of(&item.original));
     }
 
-    for item in &model.items {
-        let passed = item.visited.iter().skip(1);
-        let passed: Vec<&PathBuf> = match &item.location {
-            Some(_) => passed.take(item.visited.len().saturating_sub(2)).collect(),
-            None => passed.collect(),
-        };
+    let originals: Vec<&PathBuf> = model
+        .items
+        .iter()
+        .filter(|item| !item.arrival)
+        .map(|item| &item.original)
+        .collect();
 
-        for visited in passed {
-            if exists(visited) || sources.contains(&key_of(visited)) {
+    let mut sources: Vec<Vec<String>> = Vec::new();
+
+    for outcome in &outcomes {
+        let original = &outcome.item.original;
+
+        sources.push(key_of(original));
+
+        match outcome.trail.last() {
+            Some(last) if !outcome.destroyed => composition.moves.push(Move {
+                from: original.clone(),
+                to: last.path.clone(),
+            }),
+            _ => composition.deletes.push(original.clone()),
+        }
+    }
+
+    for outcome in &outcomes {
+        let original = &outcome.item.original;
+        let skip = if outcome.destroyed { 1 } else { 2 };
+        let passed = &outcome.trail[1..outcome.trail.len().saturating_sub(skip - 1).max(1)];
+
+        for visit in passed {
+            let beneath_original = originals
+                .iter()
+                .any(|other| *other != original && is_beneath(&visit.path, other));
+
+            if (checks.exists)(&visit.path)
+                || beneath_original
+                || sources.contains(&key_of(&visit.path))
+            {
                 continue;
             }
 
-            sources.push(key_of(visited));
+            sources.push(key_of(&visit.path));
 
-            match (&item.location, &item.destroyed_by) {
-                (Some(location), _) => {
-                    moves.push((visited.clone(), location.clone(), &item.origin))
-                }
-                (None, Some(destroyed_by)) => deletes.push((visited.clone(), destroyed_by)),
-                _ => {}
+            match outcome.trail.last() {
+                Some(last) if !outcome.destroyed => composition.moves.push(Move {
+                    from: visit.path.clone(),
+                    to: last.path.clone(),
+                }),
+                _ => composition.deletes.push(visit.path.clone()),
             }
         }
     }
 
-    for (from, to, origin) in moves {
-        if !is_same(&from, &to) && !exists(&to) {
-            reject(&mut composition.rejected, origin, DESTINATION_MISSING);
-        } else if !is_same(&from, &to) && exists(&from) && !refilled(&from) {
-            reject(&mut composition.rejected, origin, SOURCE_STILL_EXISTS);
-        } else {
-            composition.moves.push(Move { from, to });
-        }
-    }
+    for original in returned {
+        let covered = composition
+            .moves
+            .iter()
+            .map(|found| &found.from)
+            .chain(&composition.deletes)
+            .any(|covering| is_beneath(original, covering));
 
-    for (path, origin) in deletes {
-        if exists(&path) && !refilled(&path) {
-            reject(&mut composition.rejected, origin, PATH_STILL_EXISTS);
-        } else {
-            composition.deletes.push(path);
+        if covered {
+            composition.moves.push(Move {
+                from: original.to_path_buf(),
+                to: original.to_path_buf(),
+            });
         }
     }
 
@@ -315,3 +499,7 @@ pub fn compose_declarations(
 
     composition
 }
+
+#[cfg(test)]
+#[path = "compose_declarations.test.rs"]
+mod tests;
