@@ -36,7 +36,10 @@ try {
 	writeFileSync(join(root, "index.md"), "[guide](docs/guide.md)\n");
 	writeFileSync(join(root, "docs", "guide.md"), "");
 
-	const is = (expected) => ({ description: `is ${JSON.stringify(expected)}`, matches: (actual) => actual === expected });
+	const is = (expected) => ({
+		description: `is ${JSON.stringify(expected)}`,
+		matches: (actual) => actual === expected,
+	});
 	const startsWith = (expected) => ({
 		description: `starts with ${JSON.stringify(expected)}`,
 		matches: (actual) => actual.startsWith(expected),
