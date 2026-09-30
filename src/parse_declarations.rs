@@ -1,6 +1,10 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
+use crate::declaration_messages::{
+    Template, BACKUP, COPIED, CREATED_DIRECTORY, REMOVED, REMOVED_DIRECTORY, RENAMED, RENAMING,
+};
+use crate::match_template::{match_template, Reading};
 use crate::resolve_reference::{is_beneath, key_of, locate_path};
 use crate::unquote::{unquote_git, unquote_shell};
 
@@ -30,7 +34,7 @@ pub struct Rejected {
     pub reason: String,
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 enum Parsed {
     Skip,
     Move {
@@ -74,6 +78,25 @@ const AMBIGUOUS: &str = "ambiguous";
 const UNSUPPORTED_PATH: &str = "unsupported path";
 const EMPTY_PATH: &str = "empty path";
 const BOM: [u8; 3] = [0xEF, 0xBB, 0xBF];
+
+#[derive(Clone, Copy)]
+enum Message {
+    Renamed,
+    Copied,
+    Removed,
+    RemovedDirectory,
+    CreatedDirectory,
+    Renaming,
+}
+
+const TRANSLATED: [(Message, &[Template], Reading); 6] = [
+    (Message::Renamed, RENAMED, Reading::Shell),
+    (Message::Copied, COPIED, Reading::Shell),
+    (Message::Removed, REMOVED, Reading::Shell),
+    (Message::RemovedDirectory, REMOVED_DIRECTORY, Reading::Shell),
+    (Message::CreatedDirectory, CREATED_DIRECTORY, Reading::Shell),
+    (Message::Renaming, RENAMING, Reading::Raw),
+];
 
 fn resolve_path(text: &str, working_directory: &Path) -> Result<PathBuf, &'static str> {
     if text.is_empty() {
@@ -231,12 +254,72 @@ fn read_path(rest: &[u8]) -> Result<String, &'static str> {
 fn strip_backup_tail(line: &[u8]) -> &[u8] {
     let quoted_end = line.ends_with(b"')") || line.ends_with(b"\")");
 
-    match (0..line.len())
+    if let Some(index) = (0..line.len())
         .rev()
         .find(|index| line[*index..].starts_with(b" (backup: "))
+        .filter(|_| quoted_end)
     {
-        Some(index) if quoted_end => &line[..index],
-        _ => line,
+        return &line[..index];
+    }
+
+    for template in &BACKUP[1..] {
+        let first = template.literals[0].as_bytes();
+        let last = template.literals[template.arguments.len()].as_bytes();
+
+        if !line.ends_with(last) {
+            continue;
+        }
+
+        if let Some(index) = (0..line.len()).rev().find(|index| {
+            line[*index..].starts_with(first)
+                && !match_template(&line[*index..], template, Reading::Shell).is_empty()
+        }) {
+            return &line[..index];
+        }
+    }
+
+    line
+}
+
+fn parsed_of(message: Message, arguments: Vec<String>) -> Parsed {
+    let mut arguments = arguments.into_iter();
+    let mut next = || arguments.next().unwrap_or_default();
+
+    match message {
+        Message::Renamed | Message::Renaming => Parsed::Move {
+            from: next(),
+            to: next(),
+            hand_written: false,
+        },
+        Message::Copied => Parsed::Copy(next(), next()),
+        Message::Removed => Parsed::Removed(next()),
+        Message::RemovedDirectory => Parsed::RemovedDirectory(next()),
+        Message::CreatedDirectory => Parsed::Created(next()),
+    }
+}
+
+/// Reads a line printed in another locale: every translated template (each table's English
+/// form, first, is read by the English forms) is tried, and a line reading more than one way
+/// is ambiguous.
+fn parse_translated(line: &[u8]) -> Option<Result<Parsed, &'static str>> {
+    let mut readings: Vec<Parsed> = Vec::new();
+
+    for (message, templates, reading) in TRANSLATED {
+        for template in &templates[1..] {
+            for arguments in match_template(line, template, reading) {
+                let parsed = parsed_of(message, arguments);
+
+                if !readings.contains(&parsed) {
+                    readings.push(parsed);
+                }
+            }
+        }
+    }
+
+    match readings.len() {
+        0 => None,
+        1 => readings.pop().map(Ok),
+        _ => Some(Err(AMBIGUOUS)),
     }
 }
 
@@ -265,6 +348,10 @@ fn parse_line(line: &[u8]) -> Result<Parsed, &'static str> {
         } else {
             UNRECOGNIZED
         });
+    }
+
+    if let Some(result) = parse_translated(line) {
+        return result;
     }
 
     let text = std::str::from_utf8(line).map_err(|_| UNRECOGNIZED)?;

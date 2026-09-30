@@ -1,8 +1,10 @@
 mod compose_declarations;
+mod declaration_messages;
 mod fix_references;
 mod format_path;
 mod list_references;
 mod map_in_parallel;
+mod match_template;
 mod parse_arguments;
 mod parse_declarations;
 mod path_text;

@@ -3,31 +3,14 @@ pub fn unquote_shell(text: &[u8]) -> Option<(String, &[u8])> {
     let mut index = 0;
 
     while index < text.len() {
-        match text[index] {
-            b'\'' => {
-                let length = text[index + 1..].iter().position(|byte| *byte == b'\'')?;
+        if starts_quoted_segment(&text[index..]) {
+            index += read_quoted_segment(&text[index..], &mut word)?;
+        } else if text[index].is_ascii_whitespace() {
+            break;
+        } else {
+            word.push(text[index]);
 
-                word.extend_from_slice(&text[index + 1..index + 1 + length]);
-
-                index += length + 2;
-            }
-            b'$' if text.get(index + 1) == Some(&b'\'') => {
-                index = decode_escaped(text, index + 2, b'\'', &mut word)?;
-            }
-            b'"' => {
-                index = decode_double_quoted(text, index + 1, &mut word)?;
-            }
-            b'\\' if text.get(index + 1) == Some(&b'\'') => {
-                word.push(b'\'');
-
-                index += 2;
-            }
-            byte if byte.is_ascii_whitespace() => break,
-            byte => {
-                word.push(byte);
-
-                index += 1;
-            }
+            index += 1;
         }
     }
 
@@ -36,6 +19,33 @@ pub fn unquote_shell(text: &[u8]) -> Option<(String, &[u8])> {
     }
 
     Some((String::from_utf8(word).ok()?, &text[index..]))
+}
+
+fn starts_quoted_segment(text: &[u8]) -> bool {
+    matches!(text, [b'\'' | b'"', ..] | [b'$' | b'\\', b'\'', ..])
+}
+
+/// Reads one GNU shell-quoted segment (`'…'`, `$'…'`, `"…"` or `\'`) at the start of `text`,
+/// appending its decoded bytes to `word`; returns its length, or None when `text` starts with
+/// no segment or an unterminated one.
+pub fn read_quoted_segment(text: &[u8], word: &mut Vec<u8>) -> Option<usize> {
+    match text {
+        [b'\'', rest @ ..] => {
+            let length = rest.iter().position(|byte| *byte == b'\'')?;
+
+            word.extend_from_slice(&rest[..length]);
+
+            Some(length + 2)
+        }
+        [b'$', b'\'', ..] => decode_escaped(text, 2, b'\'', word),
+        [b'"', ..] => decode_double_quoted(text, 1, word),
+        [b'\\', b'\'', ..] => {
+            word.push(b'\'');
+
+            Some(2)
+        }
+        _ => None,
+    }
 }
 
 pub fn unquote_git(text: &str) -> Option<String> {

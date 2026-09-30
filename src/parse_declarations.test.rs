@@ -1068,3 +1068,218 @@ fn ends_a_snapshot_at_a_blank_line() {
 
     assert_eq!(snapshots, [Some(1), Some(3)]);
 }
+
+// Captured in WSL (coreutils 9.4, git 2.43, Ubuntu language packs) with
+// `LANGUAGE=<language> LC_ALL=<locale>.UTF-8`: `mv -v` of a spaced name, into a directory and
+// over a backup, `mv -v` of a directory and a file from ext4 to /mnt/c, `rm -v`, `rm -rv` and
+// `git mv -v`. The /mnt/c destination prefix is shortened to /d/T/<language>. es and ar keep
+// the messages their catalogues leave untranslated, and git has no ja or ar catalogue.
+const CAPTURED_DE: &str = "\
+    Datei umbenannt 'a b.md' -> 'c d.md'\n\
+    Datei umbenannt \"it's.md\" -> \"d/it's.md\"\n\
+    Datei umbenannt 'w.md' -> 'z.md' (Sicherung: 'z.md~')\n\
+    Verzeichnis '/d/T/de/t2' angelegt\n\
+    Verzeichnis '/d/T/de/t2/sub' angelegt\n\
+    Datei kopiert 't/sub/y.md' -> '/d/T/de/t2/sub/y.md'\n\
+    Datei kopiert 't/x.md' -> '/d/T/de/t2/x.md'\n\
+    't/x.md' wurde entfernt\n\
+    't/sub/y.md' wurde entfernt\n\
+    Verzeichnis 't/sub' wurde entfernt\n\
+    Verzeichnis 't' wurde entfernt\n\
+    Datei kopiert 'f.md' -> '/d/T/de/f2.md'\n\
+    'f.md' wurde entfernt\n\
+    'c d.md' wurde entfernt\n\
+    \"d/it's.md\" wurde entfernt\n\
+    Verzeichnis 'd' wurde entfernt\n\
+    Benenne g h.md nach i j.md um\n\
+";
+
+const CAPTURED_FR: &str = "\
+    renommé 'a b.md' -> 'c d.md'\n\
+    renommé \"it's.md\" -> \"d/it's.md\"\n\
+    renommé 'w.md' -> 'z.md' (archive : 'z.md~')\n\
+    répertoire '/d/T/fr/t2' créé\n\
+    répertoire '/d/T/fr/t2/sub' créé\n\
+    copié 't/sub/y.md' -> '/d/T/fr/t2/sub/y.md'\n\
+    copié 't/x.md' -> '/d/T/fr/t2/x.md'\n\
+    't/x.md' supprimé\n\
+    't/sub/y.md' supprimé\n\
+    répertoire 't/sub' supprimé\n\
+    répertoire 't' supprimé\n\
+    copié 'f.md' -> '/d/T/fr/f2.md'\n\
+    'f.md' supprimé\n\
+    'c d.md' supprimé\n\
+    \"d/it's.md\" supprimé\n\
+    répertoire 'd' supprimé\n\
+    Renommage de g h.md en i j.md\n\
+";
+
+const CAPTURED_ES: &str = "\
+    renamed 'a b.md' -> 'c d.md'\n\
+    renamed \"it's.md\" -> \"d/it's.md\"\n\
+    renamed 'w.md' -> 'z.md' (respaldo: 'z.md~')\n\
+    created directory '/d/T/es/t2'\n\
+    created directory '/d/T/es/t2/sub'\n\
+    copied 't/sub/y.md' -> '/d/T/es/t2/sub/y.md'\n\
+    copied 't/x.md' -> '/d/T/es/t2/x.md'\n\
+    't/x.md' borrado\n\
+    't/sub/y.md' borrado\n\
+    removed directory 't/sub'\n\
+    removed directory 't'\n\
+    copied 'f.md' -> '/d/T/es/f2.md'\n\
+    'f.md' borrado\n\
+    'c d.md' borrado\n\
+    \"d/it's.md\" borrado\n\
+    removed directory 'd'\n\
+    Renombrando g h.md a i j.md\n\
+";
+
+const CAPTURED_JA: &str = "\
+    名前変更: 'a b.md' -> 'c d.md'\n\
+    名前変更: \"it's.md\" -> \"d/it's.md\"\n\
+    名前変更: 'w.md' -> 'z.md' (バックアップ: 'z.md~')\n\
+    ディレクトリ '/d/T/ja/t2' を作成しました\n\
+    ディレクトリ '/d/T/ja/t2/sub' を作成しました\n\
+    コピー: 't/sub/y.md' -> '/d/T/ja/t2/sub/y.md'\n\
+    コピー: 't/x.md' -> '/d/T/ja/t2/x.md'\n\
+    't/x.md' を削除しました\n\
+    't/sub/y.md' を削除しました\n\
+    ディレクトリ 't/sub' を削除しました\n\
+    ディレクトリ 't' を削除しました\n\
+    コピー: 'f.md' -> '/d/T/ja/f2.md'\n\
+    'f.md' を削除しました\n\
+    'c d.md' を削除しました\n\
+    \"d/it's.md\" を削除しました\n\
+    ディレクトリ 'd' を削除しました\n\
+    Renaming g h.md to i j.md\n\
+";
+
+const CAPTURED_AR: &str = "\
+    renamed 'a b.md' -> 'c d.md'\n\
+    renamed \"it's.md\" -> \"d/it's.md\"\n\
+    renamed 'w.md' -> 'z.md' (نسخة احتياطية: 'z.md~')\n\
+    أُنشئ الدليل '/d/T/ar/t2'\n\
+    أُنشئ الدليل '/d/T/ar/t2/sub'\n\
+    copied 't/sub/y.md' -> '/d/T/ar/t2/sub/y.md'\n\
+    copied 't/x.md' -> '/d/T/ar/t2/x.md'\n\
+    حُذِف 't/x.md'\n\
+    حُذِف 't/sub/y.md'\n\
+    حُذف الدليل 't/sub'\n\
+    حُذف الدليل 't'\n\
+    copied 'f.md' -> '/d/T/ar/f2.md'\n\
+    حُذِف 'f.md'\n\
+    حُذِف 'c d.md'\n\
+    حُذِف \"d/it's.md\"\n\
+    حُذف الدليل 'd'\n\
+    Renaming g h.md to i j.md\n\
+";
+
+fn assert_captured_locale(input: &str, language: &str) {
+    let (declarations, rejected) = parse(input);
+    let target = |path: &str| foreign_path_of(&format!("/d/T/{language}{path}"));
+
+    assert!(rejected.is_empty(), "{language}: {rejected:?}");
+    assert_eq!(
+        moves_of(&declarations),
+        vec![
+            (path_of("a b.md"), path_of("c d.md")),
+            (path_of("it's.md"), path_of("d/it's.md")),
+            (path_of("w.md"), path_of("z.md")),
+            (path_of("t"), target("/t2")),
+            (path_of("t/sub"), target("/t2/sub")),
+            (path_of("t/sub/y.md"), target("/t2/sub/y.md")),
+            (path_of("t/x.md"), target("/t2/x.md")),
+            (path_of("f.md"), target("/f2.md")),
+            (path_of("g h.md"), path_of("i j.md")),
+        ],
+        "{language}"
+    );
+    assert_eq!(
+        deletes_of(&declarations),
+        vec![path_of("c d.md"), path_of("d/it's.md"), path_of("d")],
+        "{language}"
+    );
+}
+
+#[test]
+fn parses_the_captured_german_output() {
+    assert_captured_locale(CAPTURED_DE, "de");
+}
+
+#[test]
+fn parses_the_captured_french_output() {
+    assert_captured_locale(CAPTURED_FR, "fr");
+}
+
+#[test]
+fn parses_the_captured_spanish_output() {
+    assert_captured_locale(CAPTURED_ES, "es");
+}
+
+#[test]
+fn parses_the_captured_japanese_output() {
+    assert_captured_locale(CAPTURED_JA, "ja");
+}
+
+#[test]
+fn parses_the_captured_right_to_left_arabic_output() {
+    assert_captured_locale(CAPTURED_AR, "ar");
+}
+
+fn line_of(template: &Template, arguments: [&str; 2]) -> String {
+    template.arguments.iter().enumerate().fold(
+        template.literals[0].to_string(),
+        |line, (slot, argument)| line + arguments[*argument] + template.literals[slot + 1],
+    )
+}
+
+#[test]
+fn reads_every_generated_template_back() {
+    let quoted = ["'a b.md'", "'d/c'\\''s.md'"];
+    let raw = ["a b.md", "d/c's.md"];
+    let [first, second] = raw.map(str::to_string);
+
+    for (message, templates, reading) in TRANSLATED {
+        let arguments = if reading == Reading::Shell {
+            quoted
+        } else {
+            raw
+        };
+        let expected = match message {
+            Message::Renamed | Message::Renaming => Parsed::Move {
+                from: first.clone(),
+                to: second.clone(),
+                hand_written: false,
+            },
+            Message::Copied => Parsed::Copy(first.clone(), second.clone()),
+            Message::Removed => Parsed::Removed(first.clone()),
+            Message::RemovedDirectory => Parsed::RemovedDirectory(first.clone()),
+            Message::CreatedDirectory => Parsed::Created(first.clone()),
+        };
+
+        for template in templates {
+            let line = line_of(template, arguments);
+
+            assert_eq!(parse_line(line.as_bytes()), Ok(expected.clone()), "{line}");
+        }
+    }
+
+    for template in BACKUP {
+        let line = format!("renamed 'a' -> 'b'{}", line_of(template, ["'b~'", ""]));
+
+        assert_eq!(
+            parse_line(line.as_bytes()),
+            Ok(Parsed::Move {
+                from: "a".to_string(),
+                to: "b".to_string(),
+                hand_written: false,
+            }),
+            "{line}"
+        );
+    }
+}
+
+#[test]
+fn rejects_a_translated_line_that_splits_more_than_one_way() {
+    assert_rejected("Benenne a nach b nach c um", "ambiguous");
+}
