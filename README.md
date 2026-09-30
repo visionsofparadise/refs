@@ -125,3 +125,5 @@ config.json:1:12: docs/guide.md -> GUIDE.md
 ## License
 
 [MIT](LICENSE)
+
+The translated message templates embedded in `src/declaration_messages.rs` come from GNU coreutils and git translation catalogues under the GPL; their licenses and credits are in [TRANSLATION-NOTICES.txt](TRANSLATION-NOTICES.txt).

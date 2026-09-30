@@ -1,0 +1,401 @@
+Translated message templates
+============================
+
+refs embeds translated message templates in src/declaration_messages.rs, so it can
+recognise the lines GNU coreutils and git print when they move or remove a file in any
+language. The templates are extracted from the gettext translation catalogues (po/*.po)
+of the two projects by scripts/generate-messages.mjs, and each catalogue remains under
+the license and copyright of its translators and the Free Software Foundation, given
+below.
+
+GNU coreutils
+-------------
+
+Releases: 8.28 to 9.12
+License: GPL-3.0-or-later; each catalogue header states "same license as the coreutils package".
+Source: https://ftpmirror.gnu.org/gnu/coreutils/coreutils-<version>.tar.xz (po/)
+License text: https://www.gnu.org/licenses/gpl-3.0.txt
+
+[af] (header of release 9.12)
+  Copyright (C) 2004 Free Software Foundation, Inc.
+  Petri Jooste <rkwjpj@puknet.puk.ac.za>, 2004.
+
+[ar] (header of release 9.12)
+  Copyright (C) 2026 Free Software Foundation, Inc.
+  Zayed Al-Saidi <zayed.alsaidi@gmail.com>, 2026.
+
+[be] (header of release 9.12)
+  Copyright (C) 2002, 2003, 2004, 2005, 2006 Free Software Foundation, Inc.
+  Alexander Nyakhaychyk <nyakhaychyk@gmail.com>, 2002, 2003, 2006.
+
+[bg] (header of release 9.12)
+  Copyright (C) 2003, 2004, 2005, 2006, 2018, 2019, 2020, 2022, 2023, 2025, 2026 Free Software Foundation, Inc.
+  Anton Zinoviev <zinoviev@debian.org>, 2003, 2004, 2005, 2006.
+  Alexander Shopov <ash@kambanaria.org>, 2018, 2019, 2020, 2022, 2023, 2025, 2026.
+
+[ca] (header of release 9.12)
+  Copyright (C) 1999, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2015, 2018, 2021, 2022, 2023 Free Software Foundation, Inc.
+  Ivan Vilata i Balaguer <ivan@selidor.net>, 1999.
+  Jordi Mallach <jordi@sindominio.net>, 2001, 2002.
+  Ernest Adrogué Calveras <eadrogue@gmx.net>, 2002.
+  Ivan Vilata i Balaguer <ivan@selidor.net>, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2018, 2021, 2022, 2023.
+
+[cs] (header of release 9.12)
+  Copyright (C) 1996 Free Software Foundation, Inc.
+  Vladimir Michl <Vladimir.Michl@seznam.cz>, 1996.
+  Petr Pisar <petr.pisar@atlas.cz>, 2006, 2007, 2008, 2009, 2010, 2011, 2012.
+  Petr Pisar <petr.pisar@atlas.cz>, 2013, 2014, 2015, 2016, 2017, 2018, 2019.
+  Petr Pisar <petr.pisar@atlas.cz>, 2020, 2021, 2022, 2023, 2024, 2025, 2026.
+
+[da] (header of release 9.12)
+  Copyright (C) 1996, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023 Free Software Foundation, Inc.
+  Keld Jørn Simonsen <keld@dkuug.dk>, 2000-2003.
+  Gennemsyn 2003-03-26 Ole Laursen <olau@hardworking.dk>
+  Keld Simonsen <keld@keldix.com>, 2010.
+  Ask Hjorth Larsen <asklarsen@gmail.com>, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2021, 2022, 2023.
+
+[de] (header of release 9.12)
+  Copyright © 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2016 Free Software Foundation, Inc.
+  Karl Eichwalder <ke@suse.de>, 2001-2002.
+  Lutz Behnke <lutz.behnke@gmx.de>, 1996-2001.
+  Michael Schmidt <michael@guug.de>, 1996-2000.
+  Michael Piefel <piefel@informatik.hu-berlin.de>, 2001-2011.
+  Philipp Thomas <pth@suse.de>, 2010-2017.
+  Roland Illig <roland.illig@gmx.de>, 2019-2020.
+  Mario Blättermann <mario.blaettermann@gmail.com>, 2021-2023, 2025-2026.
+
+[el] (header of release 9.12)
+  Copyright (C) 1999, 2000, 2001, 2002, 2008, 2009 Free Software Foundation, Inc.
+  Simos Xenitellis <simos.lists@googlemail.com>, 1999, 2000, 2001, 2002, 2008, 2009.
+
+[eo] (header of release 9.12)
+  Copyright (C) 2014 Free Software Foundation, Inc.
+  Benno Schulenberg <benno@vertaalt.nl>, 2011, 2012, 2013, 2014, 2017.
+
+[es] (header of release 9.12)
+  Copyright (C) 2002, 2003, 2004, 2010, 2011, 2013, 2014 Free Software Foundation, Inc.
+  Santiago Vila Doncel <sanvila@unex.es>, 2002, 2003, 2004, 2010, 2011, 2013, 2014.
+
+[et] (header of release 9.12)
+  Copyright (C) 2000 Free Software Foundation, Inc.
+  Toomas Soome <tsoome@me.com>, 2026.
+
+[eu] (header of release 9.12)
+  Copyright (C) 2010 Free Software Foundation, Inc.
+  Mikel Olasagasti Uranga <hey_neken@mundurat.net>, 2004, 2009, 2010.
+
+[fi] (header of release 9.12)
+  Copyright © 2002, 2003, 2004, 2006, 2008, 2010 Free Software Foundation, Inc.
+  Lauri Nurmi <lanurmi@iki.fi>, 2003, 2004, 2006, 2008, 2010, 2021.
+  Matti Koskimies <matti@apulanta.fi>, 2002.
+
+[fr] (header of release 9.12)
+  Copyright © 2026 Free Software Foundation, Inc.
+  Michel Robitaille <robitail@IRO.UMontreal.CA>, 1996-2007.
+  kerb <y.kerb@laposte.net>, 2008, 2009.
+  Stéphane Raimbault <stephane.raimbault@gmail.com>, 2009-2012.
+  David Prévot <david@tilapin.org>, 2012-2014.
+  Frédéric Marchal <fmarchal@perso.be>, 2026
+
+[ga] (header of release 9.12)
+  Copyright (C) 2003 Free Software Foundation, Inc.
+  Kevin Patrick Scannell <kscanne@gmail.com>, 2004, 2006, 2007, 2008.
+
+[gl] (header of release 9.12)
+  Copyright (C) 2000, 2001, 2002 Free Software Foundation, Inc.
+  Jacobo Tarrio <jtarrio@trasno.net>, 2000, 2001, 2002.
+
+[hr] (header of release 9.12)
+  Copyright (C) 2026 Free Software Foundation, Inc.
+  Tomislav Krznar <tomislav.krznar@gmail.com>, 2012.
+  Božidar Putanec <bozidarp@yahoo.com>, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026.
+
+[hu] (header of release 9.12)
+  Copyright (C) 2002, 2005, 2006, 2007, 2008, 2010, 2011, 2012, 2013, 2014, 2016, 2017, 2018 Free Software Foundation, Inc.
+  Emese Kovács <emese@instantweb.hu>, 2002.
+  Gabor Kelemen <kelemeng@gnome.hu>, 2005, 2006, 2007, 2008, 2010, 2011, 2012, 2013, 2014, 2016, 2017, 2018.
+  Balázs Úr <urbalazs@gmail.com>, 2015.
+
+[id] (header of release 9.12)
+  Copyright (C) 2008 Free Software Foundation, Inc.
+  Arif E. Nugroho <arif_endro@yahoo.com>, 2008, 2009, 2010, 2011, 2012, 2013.
+
+[it] (header of release 9.12)
+  Copyright © 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011 Free Software Foundation, Inc.
+  Marco d'Itri <md@linux.it>, 1998, 1999.
+  Giovanni Bortolozzo <borto@dei.unipd.it>, 1998.
+  Giorgio Catanzaro <catanzag@gmail.com>, 2009, 2010, 2011.
+
+[ja] (header of release 9.12)
+  Copyright (C) 2000, 2010, 2011, 2014, 2021 Free Software Foundation, Inc.
+  Masahito Yamaga <yamaga@ipc.chiba-u.ac.jp>, 2002.
+   derived from the version by Yasuyuki Furukawa <yasu@on.cs.keio.ac.jp> 1998.
+                               Jun Nishii <jun@flatout.org> 1999.
+                               Daisuke Yamashita <yamad@mb.infoweb.ne.jp> 1999.
+  Yasuaki Taniguchi <yasuakit@gmail.com>, 2010, 2011, 2014.
+  Akihiro Motoki <amotoki@gmail.com>, 2021, 2022, 2023
+  Zachary Winnerman <zacharyw09264@gmail.com>, 2025, 2026
+
+[ka] (header of release 9.12)
+  Copyright (C) 2023 Free Software Foundation, Inc.
+  Temuri Doghonadze <temuri.doghonadze@gmail.com>, 2023, 2025.
+
+[ko] (header of release 9.12)
+  Copyright (C) 1996, 1997, 2001, 2002, 2021, 2022, 2023, 2025, 2026 Free Software Foundation, Inc.
+  Ys Cho <yscho041011@gmail.com>, 2026.
+  Bang Jun-Young <bangjy@nownuri.nowcom.co.kr>, 1996-1997.
+  Changwoo Ryu <cwryu@debian.org>, 2001-2002.
+  Seong-ho Cho <darkcircle.0426@gmail.com>, 2021-2025, 2026.
+
+[lg] (header of release 9.12)
+  Copyright (C) 2009 Free Software Foundation, Inc.
+  Kizito Birabwa <kbirabwa@yahoo.co.uk>, 2011.
+
+[lt] (header of release 9.12)
+  Copyright (C) 2009 Free Software Foundation, Inc.
+  Gintautas Miliauskas <gintas@akl.lt>, 2008, 2009.
+  Andrius Štikonas <stikonas@gmail.com>, 2009.
+
+[ms] (header of release 9.12)
+  Copyright (C) 2001 Free Software Foundation, Inc.
+  Hasbullah Bin Pit <sebol@ikhlas.com>, 2003.
+
+[nb] (header of release 9.12)
+  Copyright (C) 1996 Free Software Foundation, Inc.
+  Eivind Tagseth <eivindt@multinet.no>, 1996, 1997, 1999.
+  Åka Sikrom <a4@hush.com>, 2014-2020.
+  Johnny A. Solbu <johnny@solbu.net>, 2022.
+
+[nl] (header of release 9.12)
+  Copyright (C) 2026 Free Software Foundation, Inc.
+  Erick Branderhorst <branderh@debian.org>, 1996.
+  Ivo Timmermans <ivo@o2w.nl>, 2000.
+  Freek de Kruijf <f.de.kruijf@gmail.com>, 2004, 2005, 2006, 2007, 2008, 2009, 2010.
+  Benno Schulenberg <vertaling@coevern.nl>, 2008, 2010, 2011, 2012, 2013, 2014, 2015, 2016.
+  Benno Schulenberg <vertaling@coevern.nl>, 2017, 2019, 2020, 2022, 2023, 2024, 2025, 2026.
+
+[pl] (header of release 9.12)
+  Copyright (C) 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026 Free Software Foundation, Inc.
+  Rafał Maszkowski <rzm@icm.edu.pl> 1996-2001, 2003-2026.
+  ptx: Paweł Krawczyk <kravietz@pipeta.chemia.pk.edu.pl>, 1996.
+  sh-utils: Paweł Krawczyk <kravietz@ceti.pl>, 1997, 1998, 1999.
+  fileutils: Andrzej Krzysztofowicz <ankry@mif.pg.gda.pl>, 2002.
+  3 corrections: Andrzej Krzysztofowicz <ankry@green.mif.pg.gda.pl>, 2006.
+  1 correction: Daniel Janus <dj189395@students.mimuw.edu.pl>, 2007.
+  2 format strings: Jakub Bogusz <qboosh@pld-linux.org>, 2007.
+  typo: Karol Kosek <krkk@krkk.ct8.pl> via JB, 2019.
+
+[pt] (header of release 9.12)
+  Copyright (C) 2018 Free Software Foundation, Inc.
+  António João Serras Rendas <arendas@mail.telepac.pt>, 1996
+  Helder Correia <helder.pereira.correia@gmail.com>, 2007-2008
+  Pedro Albuquerque <pmra@protonmail.com>, 2018 - 2026.
+
+[pt_BR] (header of release 9.12)
+  Copyright (C) 2026 Free Software Foundation, Inc.
+  Cyro Mendes De Moraes Neto <neto@conectiva.com.br>, 1998.
+  Rodrigo Stulzer Lopes <rodrigo@conectiva.com.br>, 2001.
+  Juan Carlos Castro y Castro <jcastro@vialink.com.br>, 2003.
+  Rodolfo Ribeiro Gomes <rodolforg@gmail.com>, 2008, 2010, 2012.
+  Rafael Fontenelle <rafaelff@gnome.org>, 2016-2026.
+
+[ro] (header of release 9.12)
+  Copyright © 2009 - 2026 Free Software Foundation, Inc.
+  Sergiu Bivol <sergiu@ase.md>, 2010.
+  Remus-Gabriel Chelu <remusgabriel.chelu@disroot.org>, 2022 - 2026.
+  Actualizări realizate de Remus-Gabriel Chelu <remusgabriel.chelu@disroot.org>, 15.01.2022.
+
+[ru] (header of release 9.12)
+  Copyright (C) 1999, 2000, 2005, 2006, 2009, 2010 Free Software Foundation, Inc.
+  Denis Perchine <dyp@perchine.com>, 1997-2002.
+  Oleg Tihonov <ost@tatnipi.ru>, 1999-2007.
+  Yuri Kozlov <yuray@komyakino.ru>, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022.
+  Pavel Maryanov <acid@jack.kiev.ua>, 2011.
+
+[sk] (header of release 9.12)
+  Copyright (C) 1996 Free Software Foundation, Inc.
+  Miroslav Vasko <vasko@debian.cz>, 1999.
+  Ivan Masár <helix84@centrum.sk>, 2007, 2008, 2012.
+
+[sl] (header of release 9.12)
+  Copyright (C) 1996, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2018, 2024 Free Software Foundation, Inc.
+  Primož Peterlin <primozz.peterlin@gmail.com>, 1996, 1999, 2000, 2001, 2002, 2003, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2019, 2024.
+  Klemen Košir <klemen913@gmail.com>, 2011.
+
+[sr] (header of release 9.12)
+  Copyright © 2014 Free Software Foundation, Inc.
+  Мирослав Николић <miroslavnikolic@rocketmail.com>, 2014-2026.
+
+[sv] (header of release 9.12)
+  Copyright © 1997, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2023, 2024, 2025, 2026 Free Software Foundation, Inc.
+  Peter Antman <peter.antman@abc.se>, 1997.
+  Thomas Olsson <cid95tho@lustudat.student.lu.se>, 1997.
+  Daniel Resare <daniel@resare.com> 1999, 2000.
+  Göran Uddeborg <goeran@uddeborg.se>, 1996, 1997, 1998, 1999, 2000, 2001, 2002, 2003, 2004, 2005, 2006, 2007, 2008, 2009, 2010, 2011, 2012, 2013, 2014, 2015, 2016, 2017, 2018, 2020, 2021, 2023, 2024, 2025, 2026.
+
+[ta] (header of release 9.12)
+  Copyright (C) 2023 Free Software Foundation, Inc.
+  Anbarasan Sivakumar <ivanovicha350@gmail.com>, 2023.
+  Arun Isaac <arunisaac@systemreboot.net>, 2023.
+
+[tr] (header of release 9.12)
+  Copyright (C) 2003, 2005 Free Software Foundation, Inc.
+  Ali Devin Sezer <Ali_Sezer@brown.edu>, 2002.
+  Nilgün Belma Bugüner <nilgun@superonline.com>, 2001, 2002.
+  Onur Tolga ŞEHİTOĞLU <onur@lcsl.metu.edu.tr>, 1998.
+  Deniz Akkus Kanca <deniz@arayan.com>, 2001,2003, 2004.
+  Volkan Gezer <volkangezer@gmail.com>, 2015.
+  Emir SARI <emir_sari@icloud.com>, 2022.
+
+[uk] (header of release 9.12)
+  Copyright (C) 2006 Free Software Foundation, Inc.
+  Maxim Dziumanenko <dziumanenko@gmail.com>, 2007-2009.
+  sevenfourk <sevenfourk@gmail.com>, 2009.
+  Yuri Chornoivan <yurchor@ukr.net>, 2011-2026.
+
+[vi] (header of release 9.12)
+  Copyright © 2016 Free Software Foundation, Inc.
+  Phan Vinh Thinh <teppi82@gmail.com>, 2005.
+  Clytie Siddall <clytie@riverland.net.au>, 2007-2010.
+  Nguyễn Vũ Hưng <vuhung16plus@gmail.com>, 2011-2012.
+  Nguyễn Thái Ngọc Duy <pclouds@gmail.com>, 2012.
+  Trần Ngọc Quân <vnwildman@gmail.com>, 2012-2014, 2015, 2016, 2017, 2018.
+
+[zh_CN] (header of release 9.12)
+  Copyright (C) 1998, 2002, 2004, 2005, 2009, 2010, 2011 Free Software Foundation, Inc.
+  Yip Chi Lap <clyip@cs.hku.hk>, 1998.
+  Abel Cheung <maddog@linux.org.hk>, 2002.
+  Anthony Fok <anthony@thizlinux.com>, 2002.
+  Funda Wang <fundawang@linux.net.cn>, 2004, 2005.
+  Ji ZhengYu <zhengyuji@gmail.com>, 2009.
+  Aron Xu <happyaron.xu@gmail.com>, 2009, 2010, 2011, 2015.
+  Boyuan Yang <073plan@gmail.com>, 2018, 2019, 2020, 2021, 2025.
+  Wenbin Lv <wenbin816@gmail.com>, 2022, 2023, 2024, 2025, 2026.
+
+[zh_TW] (header of release 9.12)
+  Copyright (C) 1998, 2002, 2004, 2005, 2009, 2010, 2011, 2019, 2020, 2026 Free Software Foundation, Inc.
+  Yip Chi Lap <clyip@cs.hku.hk>, 1998.
+  Abel Cheung <maddog@linux.org.hk>, 2002, 2005.
+  Anthony Fok <anthony@thizlinux.com>, 2002.
+  Funda Wang <fundawang@linux.net.cn>, 2004, 2005.
+  Ji ZhengYu <zhengyuji@gmail.com>, 2009.
+  Aron Xu <happyaron.xu@gmail.com>, 2009, 2010, 2011, 2015.
+  Boyuan Yang <073plan@gmail.com>, 2018, 2019.
+  Yi-Jyun Pan <pan93412@gmail.com>, 2019, 2020.
+  Cheng-Chia Tseng <pswo10680@gmail.com>, 2020.
+  Alang Hsu <alang.hsu@gmail.com>, 2026.
+
+git
+---
+
+Releases: 2.20.0 to 2.56.0
+License: GPL-2.0-only; each catalogue header states "same license as the Git package", and its COPYING is GPL version 2.
+Source: https://github.com/git/git (po/ at tag v<version>)
+License text: https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt
+
+[af] (header of release 2.56.0)
+  Copyright (C) 2026 THE Git'S COPYRIGHT HOLDER
+
+[bg] (header of release 2.56.0)
+  Copyright (C) 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026 Alexander Shopov <ash@kambanaria.org>.
+  Alexander Shopov <ash@kambanaria.org>, 2014, 2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026.
+
+[ca] (header of release 2.56.0)
+  Alex Henrie <alexhenrie24@gmail.com>, 2014-2016.
+  Jordi Mas i Hernàndez <jmas@softcatala.org>, 2016-2024
+  Mikel Forcada <mikel.forcada@gmail.com> 2024-
+
+[de] (header of release 2.56.0)
+  Copyright (C) 2019 Matthias Rüster <matthias.ruester@gmail.com>
+  Matthias Rüster <matthias.ruester@gmail.com>, 2019-2020.
+  Ralf Thielow <ralf.thielow@gmail.com>, 2010-2019.
+
+[es] (header of release 2.56.0)
+  Copyright (C) 2018 Christopher Diaz Riveros <christopher.diaz.riv@gmail.com>
+  Christopher Diaz Riveros <christopher.diaz.riv@gmail.com>, 2017.
+
+[fr] (header of release 2.56.0)
+  Copyright (C) 2023 Jean-Noël Avila <jn.avila@free.fr>
+  Jean-Noël Avila <jn.avila@free.fr>, 2013-2019.
+  Sébastien Helleu <flashcode@flashtux.org>, 2013.
+
+[ga] (header of release 2.56.0)
+  Copyright (C) 2025 THE Git'S COPYRIGHT HOLDER
+
+[id] (header of release 2.56.0)
+  Copyright (C) 2021 Bagas Sanjaya
+  Bagas Sanjaya <bagasdotme@gmail.com>, 2021.
+
+[it] (header of release 2.56.0)
+  Copyright (C) 2012 Marco Paolone <marcopaolone@gmail.com>
+  Copyright © 2018-2020 Alessandro Menti <alessandro.menti@alessandromenti.it>
+  Alessandro Menti <alessandro.menti@alessandromenti.it>, 2020.
+
+[ko] (header of release 2.56.0)
+  Copyright (C) 2015-2018 git Korean translation contributors
+   Hyunjun Kim <yoloseem@users.noreply.github.com>, 2015.
+   Changwoo Ryu <cwryu@debian.org>, 2015-2018.
+   Sihyeon Jang <uneedsihyeon@gmail.com>, 2018.
+   Gwan-gyeong Mun <elongbug@gmail.com>, 2018.
+   Seoyeon Kwon <syeon0204@gmail.com>, 2025.
+
+[pl] (header of release 2.56.0)
+  Copyright (C) 2017 m4sk1n, m4sk1n@vivaldi.net
+  Copyright (C) 2020 Arusekk <arek_koz@o2.pl>
+  wybrał Marcin Kasperski <Marcin.Kasperski@acn.waw.pl>.
+  Arusekk <arek_koz@o2.pl>, 2020, 2021.
+
+[pt_BR] (header of release 2.56.0)
+  Copyright (C) 2026 Daniel Pereira <danielmaraboo@gmail.com>
+  Daniel Pereira <danielmaraboo@gmail.com>, 2026.
+
+[pt_PT] (header of release 2.56.0)
+  Copyright (C) 2020-2022 Daniel Santos <dacs.git@brilhante.top>
+  Copyright (C) 2016-2017 Vasco Almeida <vascomalmeida@sapo.pt>
+  Copyright (C) 2012 Marco Sousa <marcomsousa AT gmail.com>
+    - Daniel Santos <dacs.git@brilhante.top>
+    - Vasco Almeida <vascomalmeida@sapo.pt>
+
+[ru] (header of release 2.56.0)
+  Copyright (C) YEAR THE PACKAGE'S COPYRIGHT HOLDER
+  Alexander Golubev <fatzer2@gmail.com>, 2020
+  Dimitriy Ryazantcev <DJm00n@mail.ru>, 2014-2023
+  Sergey Alyoshin <alyoshin.s@gmail.com>, 2020-2021
+  Sergey Kuznetsov <votkinsk@gmail.com>, 2021-2022
+  Чук Таблицоменделеев (Aurum79) <aurum444an@gmail.com>, 2019
+
+[sv] (header of release 2.56.0)
+  Copyright (C) 2010-2026 Peter Krefting <peter@softwolves.pp.se>
+  Peter Krefting <peter@softwolves.pp.se>, 2010-2026.
+
+[tr] (header of release 2.56.0)
+  SPDX-FileCopyrightText: 2020-2026 Emir SARI <emir_sari@icloud.com>
+  Emir SARI <emir_sari@icloud.com>, 2020-2026
+
+[uk] (header of release 2.56.0)
+  Copyright (c) 2023 Arkadii Yakovets.
+  Copyright (c) 2023 Kateryna Golovanova.
+
+[vi] (header of release 2.56.0)
+  Copyright (C) 2012-2022, Translation Project, Vietnamese Team <http://translationproject.org/team/vi.html>
+  Copyright (C) 2024-2025, Vũ Tiến Hưng <newcomerminecraft@gmail.com>
+  Nguyễn Thái Ngọc Duy <pclouds@gmail.com>, 2012.
+  Đoàn Trần Công Danh <congdanhqx@gmail.com>, 2020.
+  Trần Ngọc Quân <vnwildman@gmail.com>, 2012-2022.
+  Vũ Tiến Hưng <newcomerminecraft@gmail.com>, 2024-2025.
+
+[zh_CN] (header of release 2.56.0)
+  Copyright (C) 2012,2013 Jiang Xin <worldhello.net AT gmail.com>
+  Copyright (C) 2021-2023 Fangyi Zhou <me@fangyi.io>
+
+[zh_TW] (header of release 2.56.0)
+  Copyright (C) 2012-2021 Jiang Xin <worldhello.net AT gmail.com>
+  Copyright (C) 2019-2023 Yi-Jyun Pan <pan93412@gmail.com>
+  Yi-Jyun Pan <pan93412@gmail.com>, 2021, 2022, 2023, 2024, 2025, 2026.
+  Kaiyang Wu <self@origincode.me>, 2022, 2026.
+  Lumynous <lumynou5.tw@gmail.com>, 2023, 2024, 2025, 2026.
+  Kisaragi Hiu <mail@kisaragi-hiu.com>, 2024, 2026.
+  Ngoo Ka-iu <willy04wu69@gmail.com>, 2024, 2026.
+  Nightfeather Chen <slat@nightfeather.me>, 2024, 2026.
+  hms5232 <hms5232@hhming.moe>, 2024, 2025, 2026.
+  WellsTsai <admin@wellstsai.com>, 2026.

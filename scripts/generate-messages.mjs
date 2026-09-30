@@ -27,6 +27,8 @@ const COREUTILS_SOURCE = "https://ftpmirror.gnu.org/gnu/coreutils";
 const GIT_SOURCE = "https://github.com/git/git";
 const CACHE = join(".scratch", "messages");
 const OUTPUT = join("src", "declaration_messages.rs");
+const NOTICES = "TRANSLATION-NOTICES.txt";
+const CREDITS = new Map();
 
 const MESSAGES = [
 	["RENAMED", "coreutils", "renamed %s -> %s", "", 2],
@@ -152,6 +154,20 @@ const printedFormatOf = (translation, { msgid, suffix }) => {
 	return printed.replace(/[ \t\r\n]+$/, "");
 };
 
+const creditsOf = (text) => {
+	const lines = text.split(/\r?\n/);
+	const header = lines.slice(
+		0,
+		lines.findIndex((line) => line.startsWith("msgid")),
+	);
+
+	return header
+		.filter((line) => line.startsWith("#"))
+		.map((line) => line.replace(/^#\s?/, "").trimEnd())
+		.filter((line) => !/distributed under/i.test(line))
+		.filter((line) => /copyright|\(c\)|©|<[^<>\s]+@[^<>\s]+>/i.test(line));
+};
+
 const collect = (messages, catalogue, skipped) => {
 	const { language, version, text } = catalogue;
 
@@ -181,6 +197,7 @@ const collect = (messages, catalogue, skipped) => {
 			known.languages.add(language);
 			known.versions.add(version);
 			message.templates.set(key, known);
+			CREDITS.set(`${message.tool}/${language}`, { version, lines: creditsOf(text) });
 		}
 	}
 };
@@ -401,6 +418,63 @@ const render = (tables) => {
 	return lines.join("\n");
 };
 
+const renderNotices = () => {
+	const section = (tool, title, releases, statement, sources) => {
+		const languages = [...CREDITS.entries()]
+			.filter(([key]) => key.startsWith(`${tool}/`))
+			.map(([key, credit]) => [key.split("/")[1], credit])
+			.sort(([left], [right]) => (left < right ? -1 : 1));
+
+		return [
+			title,
+			"-".repeat(title.length),
+			"",
+			`Releases: ${releases[0]} to ${releases.at(-1)}`,
+			statement,
+			...sources,
+			"",
+			...languages.flatMap(([language, { version, lines }]) => [
+				`[${language}] (header of release ${version})`,
+				...lines.map((line) => `  ${line}`),
+				"",
+			]),
+		];
+	};
+
+	return [
+		"Translated message templates",
+		"============================",
+		"",
+		"refs embeds translated message templates in src/declaration_messages.rs, so it can",
+		"recognise the lines GNU coreutils and git print when they move or remove a file in any",
+		"language. The templates are extracted from the gettext translation catalogues (po/*.po)",
+		"of the two projects by scripts/generate-messages.mjs, and each catalogue remains under",
+		"the license and copyright of its translators and the Free Software Foundation, given",
+		"below.",
+		"",
+		...section(
+			"coreutils",
+			"GNU coreutils",
+			COREUTILS_VERSIONS,
+			'License: GPL-3.0-or-later; each catalogue header states "same license as the coreutils package".',
+			[
+				`Source: ${COREUTILS_SOURCE}/coreutils-<version>.tar.xz (po/)`,
+				"License text: https://www.gnu.org/licenses/gpl-3.0.txt",
+			],
+		),
+		...section(
+			"git",
+			"git",
+			GIT_VERSIONS,
+			'License: GPL-2.0-only; each catalogue header states "same license as the Git package", and its COPYING is GPL version 2.',
+			[
+				`Source: ${GIT_SOURCE} (po/ at tag v<version>)`,
+				"License text: https://www.gnu.org/licenses/old-licenses/gpl-2.0.txt",
+			],
+		),
+	].join("\n");
+};
+
 const main = async () => {
 	const { bavail, bsize } = statfsSync(".");
 	const free = Math.floor((bavail * bsize) / 2 ** 30);
@@ -424,6 +498,7 @@ const main = async () => {
 
 	writeFileSync(OUTPUT, render(tables));
 	run("rustfmt", ["--edition", "2021", OUTPUT]);
+	writeFileSync(NOTICES, renderNotices());
 
 	for (const message of MESSAGES) {
 		console.log(
