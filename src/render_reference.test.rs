@@ -360,18 +360,42 @@ fn renders_an_encoded_drive_colon_as_written() {
 
 #[cfg(windows)]
 #[test]
-fn reports_a_relative_rendering_across_drives_as_unrewritable() {
-    assert_eq!(
+fn renders_a_relative_reference_across_drives_in_absolute_form() {
+    let render_across = |form: PathForm, style: PathStyle, exists: &dyn Fn(&Path) -> bool| {
         render_reference(
-            Path::new("D:\\a.md"),
-            &PathForm::FileRelative,
-            &create_plain_style(),
+            Path::new("D:\\x\\sub"),
+            &form,
+            &style,
             "",
+            Path::new("C:\\refs-absent-root\\notes"),
             Path::new("C:\\refs-absent-root"),
-            Path::new("C:\\refs-absent-root"),
-            &|_| false,
-        ),
-        None
+            exists,
+        )
+    };
+
+    let doubled = PathStyle {
+        separator: '\\',
+        doubled_backslashes: true,
+        ..create_plain_style()
+    };
+
+    let trailing = PathStyle {
+        dot_prefix: true,
+        trailing_separator: true,
+        ..create_plain_style()
+    };
+
+    assert_eq!(
+        render_across(PathForm::FileRelative, create_plain_style(), &|_| false).as_deref(),
+        Some("D:/x/sub")
+    );
+    assert_eq!(
+        render_across(PathForm::WorkingDirectoryRelative, doubled, &|_| false).as_deref(),
+        Some("D:\\\\x\\\\sub")
+    );
+    assert_eq!(
+        render_across(PathForm::FileRelative, trailing, &|_| true).as_deref(),
+        Some("D:/x/sub/")
     );
 }
 

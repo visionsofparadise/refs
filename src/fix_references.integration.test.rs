@@ -106,8 +106,12 @@ struct Report {
 }
 
 fn report_of(tree: &Tree, declarations: Vec<Declaration>) -> Report {
+    report_in(tree, &[PathBuf::from(".")], declarations)
+}
+
+fn report_in(tree: &Tree, paths: &[PathBuf], declarations: Vec<Declaration>) -> Report {
     let root = &tree.root;
-    let scope = walk_scope(&[PathBuf::from(".")], &ScopeOptions::default(), root);
+    let scope = walk_scope(paths, &ScopeOptions::default(), root);
     let plan = plan_fix(declarations, &scope, root);
 
     let findings = plan.findings.iter().map(|finding| {
@@ -960,4 +964,111 @@ fn leaves_a_round_trip_and_its_neighbours_alone() {
     let second = relocate(&tree, "docs/sub/a.md", "docs/a.md", 2);
 
     assert!(report_of(&tree, vec![first, second]).lines.is_empty());
+}
+
+#[cfg(windows)]
+fn second_drive_of(tree: &Tree) -> Option<tempfile::TempDir> {
+    let own = key_of(&tree.root).into_iter().next()?;
+
+    ('D'..='Z').find_map(|letter| {
+        let root = PathBuf::from(format!("{letter}:\\"));
+
+        if key_of(&root).first() == Some(&own) || !root.is_dir() {
+            return None;
+        }
+
+        let directory = tempfile::Builder::new()
+            .prefix("refs-test")
+            .tempdir_in(&root)
+            .ok()?;
+        let canonical = dunce::canonicalize(directory.path()).ok()?;
+
+        (key_of(&canonical).first() != Some(&own)).then_some(directory)
+    })
+}
+
+#[cfg(windows)]
+fn move_across(from: &Path, to: &Path) {
+    if from.is_dir() {
+        fs::create_dir_all(to).unwrap();
+
+        for entry in fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+
+            move_across(&entry.path(), &to.join(entry.file_name()));
+        }
+
+        fs::remove_dir(from).unwrap();
+    } else {
+        fs::create_dir_all(to.parent().unwrap()).unwrap();
+        fs::copy(from, to).unwrap();
+        fs::remove_file(from).unwrap();
+    }
+}
+
+#[cfg(windows)]
+#[test]
+fn rewrites_a_relative_reference_to_another_drive_in_absolute_form() {
+    let tree = tree_of(&[
+        (
+            "index.md",
+            "[a](tree/a.md) tree\\sub\\b.md `tree/sub/` `tree/empty/` stray.md\n",
+        ),
+        ("tree/a.md", "[n](../notes.md)\n"),
+        ("tree/sub/b.md", ""),
+        ("notes.md", ""),
+        ("stray.md", ""),
+    ]);
+
+    fs::create_dir(tree.root.join("tree/empty")).unwrap();
+
+    let Some(drive) = second_drive_of(&tree) else {
+        eprintln!("skipped: no writable second drive");
+
+        return;
+    };
+    let other = dunce::canonicalize(drive.path()).unwrap();
+    let in_scope = other.join("in");
+    let out_of_scope = other.join("out");
+
+    move_across(&tree.root.join("tree"), &in_scope.join("tree"));
+    move_across(&tree.root.join("stray.md"), &out_of_scope.join("stray.md"));
+
+    let declarations = vec![
+        Declaration::Move {
+            from: tree.root.join("tree"),
+            to: in_scope.join("tree"),
+            origin: origin_of(1),
+        },
+        Declaration::Move {
+            from: tree.root.join("stray.md"),
+            to: out_of_scope.join("stray.md"),
+            origin: origin_of(2),
+        },
+    ];
+    let report = report_in(&tree, &[PathBuf::from("."), in_scope.clone()], declarations);
+    let slashed = |path: &Path| path.display().to_string().replace('\\', "/");
+    let moved = in_scope.join("tree");
+    let moved_a = moved.join("a.md");
+    let notes = slashed(&tree.root.join("notes.md"));
+    let stray = out_of_scope.join("stray.md");
+
+    assert_eq!(
+        report.lines,
+        [
+            format!("{}:1:5: ../notes.md -> {notes}", moved_a.display()),
+            format!("index.md:1:5: tree/a.md -> {}/a.md", slashed(&moved)),
+            format!(
+                "index.md:1:16: tree\\sub\\b.md -> {}\\sub\\b.md",
+                moved.display()
+            ),
+            format!("index.md:1:31: tree/sub/ -> {}/sub/", slashed(&moved)),
+            format!("index.md:1:43: tree/empty/ -> {}/empty/", slashed(&moved)),
+            format!(
+                "index.md:1:56: stray.md -> {} (out of scope)",
+                stray.display()
+            ),
+            format!("{}: unscanned", stray.display()),
+        ]
+    );
 }

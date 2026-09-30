@@ -28,10 +28,6 @@ fn diff_names(target: &Path, base: &Path) -> Option<Vec<String>> {
         .take_while(|(target_name, base_name)| target_name == base_name)
         .count();
 
-    if common == 0 {
-        return None;
-    }
-
     let parents = std::iter::repeat_n("..".to_string(), base_key.len() - common);
 
     let names = target
@@ -143,6 +139,35 @@ fn lowercase_escapes(text: &str) -> String {
     lowered
 }
 
+#[cfg(windows)]
+const ROOTED_STYLE: AbsoluteStyle = AbsoluteStyle::Drive;
+
+#[cfg(not(windows))]
+const ROOTED_STYLE: AbsoluteStyle = AbsoluteStyle::Posix;
+
+fn shares_root(target: &Path, base: &Path) -> bool {
+    key_of(target).first() == key_of(base).first()
+}
+
+fn rendered_form(
+    target: &Path,
+    form: &PathForm,
+    referrer_directory: &Path,
+    working_directory: &Path,
+) -> PathForm {
+    let base = match form {
+        PathForm::FileRelative => referrer_directory,
+        PathForm::WorkingDirectoryRelative => working_directory,
+        PathForm::Absolute(_) => return *form,
+    };
+
+    if shares_root(target, base) {
+        *form
+    } else {
+        PathForm::Absolute(ROOTED_STYLE)
+    }
+}
+
 fn is_relative(form: &PathForm) -> bool {
     matches!(
         form,
@@ -202,6 +227,8 @@ pub fn render_reference(
     working_directory: &Path,
     exists: &dyn Fn(&Path) -> bool,
 ) -> Option<String> {
+    let form = &rendered_form(target, form, referrer_directory, working_directory);
+
     let (head, names) = match form {
         PathForm::FileRelative => split_relative(target, referrer_directory, style)?,
         PathForm::WorkingDirectoryRelative => split_relative(target, working_directory, style)?,
